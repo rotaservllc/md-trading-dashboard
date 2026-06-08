@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MD Trading Dashboard</title>
+<style>
+  :root {
+    --bg: #0d0f14; --bg2: #13161e; --bg3: #1a1d27;
+    --border: #2a2d3a; --text: #e2e4ec; --text2: #8b8fa8; --text3: #4a4e62;
+    --green: #22c55e; --red: #ef4444; --amber: #f59e0b; --blue: #3b82f6;
+    --purple: #a855f7; --mono: 'JetBrains Mono', 'Fira Code', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; min-height: 100vh; }
+
+  /* TOPBAR */
+  .topbar { display: flex; align-items: center; justify-content: space-between; padding: 0 20px; height: 48px; background: var(--bg2); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; }
+  .topbar-left { display: flex; align-items: center; gap: 12px; }
+  .logo { font-family: var(--mono); font-size: 14px; font-weight: 700; color: var(--text); letter-spacing: -0.5px; }
+  .logo span { color: var(--blue); }
+  .acct-badge { font-family: var(--mono); font-size: 10px; color: var(--text3); background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text3); }
+  .status-dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-label { font-family: var(--mono); font-size: 10px; color: var(--text3); }
+
+  /* NAV TABS */
+  .nav { display: flex; gap: 2px; padding: 0 20px; background: var(--bg2); border-bottom: 1px solid var(--border); }
+  .tab { padding: 10px 16px; font-size: 12px; color: var(--text2); cursor: pointer; border-bottom: 2px solid transparent; transition: all .15s; user-select: none; }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+
+  /* MAIN */
+  .main { padding: 20px; max-width: 1100px; margin: 0 auto; }
+  .section { display: none; }
+  .section.active { display: block; }
+
+  /* CARDS */
+  .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  .card-title { font-size: 11px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 12px; }
+
+  /* METRICS ROW */
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .mc { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .mc-label { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 6px; }
+  .mc-val { font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--text); }
+  .mc-sub { font-size: 10px; color: var(--text3); margin-top: 4px; }
+
+  /* TABLES */
+  .tbl-wrap { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 16px; }
+  .tbl-hdr { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .tbl-title { font-size: 11px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .8px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { font-size: 10px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: .6px; padding: 8px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+  td { padding: 9px 16px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 12px; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--bg3); }
+
+  /* COLORS */
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+  .neu { color: var(--text2); }
+  .high { color: var(--green); }
+  .med { color: var(--amber); }
+  .low { color: var(--text2); }
+
+  /* BADGES */
+  .badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 600; letter-spacing: .4px; }
+  .badge-csp { background: rgba(239,68,68,.15); color: var(--red); }
+  .badge-call { background: rgba(34,197,94,.15); color: var(--green); }
+  .badge-risk-on { background: rgba(34,197,94,.15); color: var(--green); }
+  .badge-mixed { background: rgba(245,158,11,.15); color: var(--amber); }
+  .badge-risk-off { background: rgba(239,68,68,.15); color: var(--red); }
+  .badge-high { background: rgba(34,197,94,.15); color: var(--green); }
+  .badge-medium { background: rgba(245,158,11,.15); color: var(--amber); }
+  .badge-low { background: rgba(255,255,255,.08); color: var(--text2); }
+
+  /* BTNS */
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 6px; border: none; cursor: pointer; font-size: 12px; font-weight: 500; transition: all .15s; }
+  .btn-pri { background: var(--blue); color: #fff; }
+  .btn-pri:hover { background: #2563eb; }
+  .btn-pri:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-sec { background: var(--bg3); color: var(--text2); border: 1px solid var(--border); }
+  .btn-sec:hover { color: var(--text); border-color: var(--text3); }
+  .btn-sm { padding: 4px 10px; font-size: 11px; }
+
+  /* SPINNER */
+  .spinner { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin .6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* REGIME BANNER */
+  .regime-banner { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-radius: 8px; margin-bottom: 16px; border: 1px solid var(--border); background: var(--bg2); }
+  .regime-banner .vix-val { font-family: var(--mono); font-size: 18px; font-weight: 700; }
+
+  /* SCAN CANDIDATE CARD */
+  .cand-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+  .cand-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .cand-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .cand-ticker { font-family: var(--mono); font-size: 16px; font-weight: 700; }
+  .cand-body { font-size: 11px; color: var(--text2); line-height: 1.7; }
+  .cand-row { display: flex; justify-content: space-between; margin-bottom: 3px; }
+  .cand-label { color: var(--text3); }
+  .cand-val { font-family: var(--mono); color: var(--text); }
+  .cand-rationale { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text2); line-height: 1.5; }
+  .cand-risk { font-size: 10px; color: var(--amber); margin-top: 4px; }
+
+  /* EMPTY STATE */
+  .empty { text-align: center; padding: 48px 20px; color: var(--text3); }
+  .empty-icon { font-size: 32px; margin-bottom: 12px; }
+  .empty-msg { font-size: 13px; }
+
+  /* ALERT */
+  .alert { padding: 8px 12px; border-radius: 6px; font-size: 11px; margin-top: 8px; }
+  .alert-ok { background: rgba(34,197,94,.1); color: var(--green); border: 1px solid rgba(34,197,94,.2); }
+  .alert-err { background: rgba(239,68,68,.1); color: var(--red); border: 1px solid rgba(239,68,68,.2); }
+  .alert-info { background: rgba(59,130,246,.1); color: var(--blue); border: 1px solid rgba(59,130,246,.2); }
+
+  /* POSITIONS TABLE */
+  .pos-empty { padding: 24px 16px; color: var(--text3); font-size: 12px; text-align: center; }
+
+  /* SCAN TAB */
+  .scan-controls { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+  .scan-meta { font-family: var(--mono); font-size: 11px; color: var(--text3); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <div class="logo">MD<span>.</span>Trading</div>
+    <div class="acct-badge">5WI51792</div>
+  </div>
+  <div class="topbar-left">
+    <div class="status-dot" id="sdot"></div>
+    <div class="status-label" id="slabel">Connecting…</div>
+  </div>
+</div>
+
+<div class="nav">
+  <div class="tab active" onclick="showTab('account')">Account</div>
+  <div class="tab" onclick="showTab('scan')">Sunday Scan</div>
+  <div class="tab" onclick="showTab('watchlist')">Watchlist</div>
+</div>
+
+<div class="main">
+
+  <!-- ACCOUNT TAB -->
+  <div class="section active" id="s-account">
+    <div id="acct-loading" style="display:flex;align-items:center;gap:8px;padding:20px;font-family:var(--mono);font-size:11px;color:var(--text3)">
+      <div class="spinner"></div>Loading account…
+    </div>
+    <div id="acct-content" style="display:none">
+      <div class="metrics">
+        <div class="mc"><div class="mc-label">Net Liq</div><div class="mc-val" id="m-netliq">—</div><div class="mc-sub">live account</div></div>
+        <div class="mc"><div class="mc-label">Cash</div><div class="mc-val" id="m-cash">—</div><div class="mc-sub">available</div></div>
+        <div class="mc"><div class="mc-label">Options BP</div><div class="mc-val" id="m-obp">—</div><div class="mc-sub">for CSPs/spreads</div></div>
+        <div class="mc"><div class="mc-label">Positions</div><div class="mc-val" id="m-pos">—</div><div class="mc-sub">open</div></div>
+      </div>
+      <div class="tbl-wrap">
+        <div class="tbl-hdr">
+          <div class="tbl-title">Open Positions</div>
+          <button class="btn btn-sec btn-sm" onclick="loadAccount()">↻ Refresh</button>
+        </div>
+        <div id="positions-body"></div>
+      </div>
+    </div>
+    <div id="acct-err" class="alert alert-err" style="display:none"></div>
+  </div>
+
+  <!-- SCAN TAB -->
+  <div class="section" id="s-scan">
+    <div class="scan-controls">
+      <button class="btn btn-pri" id="run-scan-btn" onclick="runScan()">▶ Run Scan Now</button>
+      <div class="scan-meta" id="scan-meta">—</div>
+    </div>
+    <div id="regime-banner" class="regime-banner" style="display:none">
+      <div>
+        <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px">VIX Regime</div>
+        <div class="vix-val" id="scan-vix">—</div>
+      </div>
+      <div id="scan-regime-badge"></div>
+      <div style="font-size:11px;color:var(--text2);margin-left:auto" id="scan-stats"></div>
+    </div>
+    <div id="scan-loading" style="display:flex;align-items:center;gap:8px;padding:20px;font-family:var(--mono);font-size:11px;color:var(--text3);display:none">
+      <div class="spinner"></div>Running scan… (~30s)
+    </div>
+    <div id="cand-grid" class="cand-grid"></div>
+    <div id="scan-empty" class="empty" style="display:none">
+      <div class="empty-icon">🔍</div>
+      <div class="empty-msg">No scan data yet. Click "Run Scan Now" to populate.</div>
+    </div>
+  </div>
+
+  <!-- WATCHLIST TAB -->
+  <div class="section" id="s-watchlist">
+    <div class="card">
+      <div class="card-title">Add Ticker</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input id="wl-ticker" placeholder="TICKER" style="width:100px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none;text-transform:uppercase">
+        <select id="wl-strategy" style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:12px;outline:none">
+          <option value="CSP">CSP</option>
+          <option value="CALL">CALL</option>
+        </select>
+        <button class="btn btn-pri btn-sm" onclick="addToWatchlist()">Add</button>
+      </div>
+      <div id="wl-alert"></div>
+    </div>
+    <div class="tbl-wrap">
+      <div class="tbl-hdr">
+        <div class="tbl-title">Watchlist</div>
+        <button class="btn btn-sec btn-sm" onclick="loadWatchlist()">↻ Refresh</button>
+      </div>
+      <div id="wl-body"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ============================================================
+// UTILS
+// ============================================================
+function fmt$(n) { return n == null ? '—' : '$' + parseFloat(n).toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2}); }
+function setStatus(live, label) {
+  document.getElementById('sdot').className = 'status-dot' + (live ? ' live' : '');
+  document.getElementById('slabel').textContent = label;
+}
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  const tabs = ['account','scan','watchlist'];
+  document.querySelectorAll('.tab')[tabs.indexOf(name)]?.classList.add('active');
+  document.getElementById('s-' + name)?.classList.add('active');
+  if (name === 'account') loadAccount();
+  if (name === 'scan') loadScan();
+  if (name === 'watchlist') loadWatchlist();
+}
+
+// ============================================================
+// ACCOUNT TAB
+// ============================================================
+async function loadAccount() {
+  document.getElementById('acct-loading').style.display = 'flex';
+  document.getElementById('acct-content').style.display = 'none';
+  document.getElementById('acct-err').style.display = 'none';
+  try {
+    const resp = await fetch('/api/tt-live');
+    const data = await resp.json();
+    if (!data.ok) throw new Error(data.error || 'Unknown error');
+    const s = data.summary;
+    document.getElementById('m-netliq').textContent = fmt$(s.netLiq);
+    document.getElementById('m-cash').textContent = fmt$(s.cash);
+    document.getElementById('m-obp').textContent = fmt$(s.optionsBP);
+    document.getElementById('m-pos').textContent = s.positions?.length || 0;
+    renderPositions(s.positions || []);
+    setStatus(true, 'Live · ' + (s.timing?.totalMs || '?') + 'ms');
+    document.getElementById('acct-loading').style.display = 'none';
+    document.getElementById('acct-content').style.display = 'block';
+  } catch(err) {
+    document.getElementById('acct-loading').style.display = 'none';
+    const el = document.getElementById('acct-err');
+    el.textContent = '⚠️ ' + err.message;
+    el.style.display = 'block';
+    setStatus(false, 'Error');
+  }
+}
+
+function renderPositions(positions) {
+  const body = document.getElementById('positions-body');
+  if (!positions.length) {
+    body.innerHTML = '<div class="pos-empty">No open positions</div>';
+    return;
+  }
+  body.innerHTML = `<table>
+    <thead><tr><th>Symbol</th><th>Type</th><th>Qty</th><th>Cost Basis</th></tr></thead>
+    <tbody>${positions.map(p => `<tr>
+      <td>${p.symbol}</td>
+      <td>${p.type || '—'}</td>
+      <td>${p.quantity}</td>
+      <td>${fmt$(p.costBasis)}</td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+// ============================================================
+// SCAN TAB
+// ============================================================
+async function loadScan() {
+  try {
+    const resp = await fetch('/api/trading-data');
+    const data = await resp.json();
+    if (data.scan) renderScan(data.scan);
+    else showScanEmpty();
+  } catch { showScanEmpty(); }
+}
+
+async function runScan() {
+  const btn = document.getElementById('run-scan-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Scanning…';
+  document.getElementById('scan-loading').style.display = 'flex';
+  document.getElementById('cand-grid').innerHTML = '';
+  document.getElementById('scan-empty').style.display = 'none';
+  try {
+    const resp = await fetch('/api/run-scan');
+    const data = await resp.json();
+    if (data.ok) renderScan(data);
+    else throw new Error(data.error);
+  } catch(err) {
+    document.getElementById('scan-meta').textContent = '⚠️ ' + err.message;
+    showScanEmpty();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ Run Scan Now';
+    document.getElementById('scan-loading').style.display = 'none';
+  }
+}
+
+function showScanEmpty() {
+  document.getElementById('scan-empty').style.display = 'block';
+  document.getElementById('cand-grid').innerHTML = '';
+  document.getElementById('regime-banner').style.display = 'none';
+}
+
+function renderScan(scan) {
+  const meta = document.getElementById('scan-meta');
+  const when = scan.generatedAt ? new Date(scan.generatedAt).toLocaleString('en-GB', {timeZone:'Asia/Dubai',hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'}) : '—';
+  meta.textContent = `Last: ${when} Dubai · ${scan.scanned || '?'} tickers · ${scan.candidateCount || 0} candidates`;
+
+  // Regime banner
+  const banner = document.getElementById('regime-banner');
+  banner.style.display = 'flex';
+  document.getElementById('scan-vix').textContent = scan.vix ? scan.vix : '—';
+  const regime = scan.regime || 'UNKNOWN';
+  const regimeBadge = document.getElementById('scan-regime-badge');
+  const cls = regime === 'RISK-ON' ? 'risk-on' : regime === 'MIXED' ? 'mixed' : 'risk-off';
+  regimeBadge.innerHTML = `<span class="badge badge-${cls}">${regime}</span>`;
+  document.getElementById('scan-stats').textContent = `${scan.candidateCount || 0} candidates`;
+
+  const candidates = scan.candidates || scan.all?.slice(0, 10) || [];
+  const grid = document.getElementById('cand-grid');
+  document.getElementById('scan-empty').style.display = 'none';
+
+  if (!candidates.length) {
+    showScanEmpty();
+    return;
+  }
+
+  grid.innerHTML = candidates.map(c => {
+    const confCls = c.confidence === 'HIGH' ? 'high' : c.confidence === 'MEDIUM' ? 'med' : 'low';
+    const stratBadge = (c.strategy === 'CSP' || c.strategy === 'PCS') ? 'badge-csp' : 'badge-call';
+    const confBadge = `badge-${(c.confidence||'low').toLowerCase()}`;
+    const t2row = c.strategy === 'PCS'
+      ? `<div class="cand-row"><span class="cand-label">Credit</span><span class="cand-val">$${c.credit ?? '—'}</span></div>
+         <div class="cand-row"><span class="cand-label">Max Loss</span><span class="cand-val">$${c.maxLoss ?? '—'}</span></div>
+         <div class="cand-row"><span class="cand-label">POP</span><span class="cand-val">${c.pop ?? '?'}%</span></div>
+         <div class="cand-row"><span class="cand-label">DTE</span><span class="cand-val">${c.dte || '?'}d</span></div>`
+      : c.strategy === 'DEBIT'
+      ? `<div class="cand-row"><span class="cand-label">Debit</span><span class="cand-val">$${c.optionCost ?? '—'}</span></div>
+         <div class="cand-row"><span class="cand-label">Reward:Risk</span><span class="cand-val">${c.rr ?? '?'}:1</span></div>
+         <div class="cand-row"><span class="cand-label">DTE</span><span class="cand-val">${c.expDays || '?'}d</span></div>`
+      : c.strategy === 'CSP'
+      ? `<div class="cand-row"><span class="cand-label">Collateral</span><span class="cand-val">$${c.collateral || '?'}</span></div>
+         <div class="cand-row"><span class="cand-label">Premium</span><span class="cand-val">${c.premium ? '$'+c.premium : '—'}</span></div>
+         <div class="cand-row"><span class="cand-label">Ann. Return</span><span class="cand-val">${c.annReturn ? c.annReturn+'%' : '—'}</span></div>`
+      : `<div class="cand-row"><span class="cand-label">Option Cost</span><span class="cand-val">${c.optionCost ? '$'+c.optionCost : '—'}</span></div>
+         <div class="cand-row"><span class="cand-label">DTE</span><span class="cand-val">${c.expDays || '?'}d</span></div>`;
+    return `<div class="cand-card">
+      <div class="cand-header">
+        <div class="cand-ticker">${c.ticker}</div>
+        <div style="display:flex;gap:6px">
+          <span class="badge ${stratBadge}">${c.strategy}</span>
+          <span class="badge ${confBadge}">${c.confidence || '?'}</span>
+        </div>
+      </div>
+      <div class="cand-body">
+        <div class="cand-row"><span class="cand-label">Price</span><span class="cand-val">$${parseFloat(c.price||0).toFixed(2)}</span></div>
+        <div class="cand-row"><span class="cand-label">IVR</span><span class="cand-val">${c.ivrPct || '?'}%</span></div>
+        <div class="cand-row"><span class="cand-label">IV30</span><span class="cand-val">${c.ivPct || '?'}%</span></div>
+        <div class="cand-row"><span class="cand-label">Strike</span><span class="cand-val">$${c.suggestedStrike || '?'}</span></div>
+        <div class="cand-row"><span class="cand-label">Expiry</span><span class="cand-val">${c.nearExpiry || '?'}</span></div>
+        ${t2row}
+        <div class="cand-row"><span class="cand-label">Score</span><span class="cand-val ${confCls}">${c.score}</span></div>
+        <div class="cand-rationale">💡 ${c.rationale || ''}</div>
+        ${c.keyRisk ? `<div class="cand-risk">⚠️ ${c.keyRisk}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ============================================================
+// WATCHLIST TAB
+// ============================================================
+async function loadWatchlist() {
+  try {
+    const resp = await fetch('/api/trading-data');
+    const data = await resp.json();
+    renderWatchlist(data.watchlist || []);
+  } catch { renderWatchlist([]); }
+}
+
+function renderWatchlist(list) {
+  const body = document.getElementById('wl-body');
+  if (!list.length) {
+    body.innerHTML = '<div class="pos-empty">Watchlist is empty</div>';
+    return;
+  }
+  body.innerHTML = `<table>
+    <thead><tr><th>Ticker</th><th>Strategy</th><th>Action</th></tr></thead>
+    <tbody>${list.map(w => `<tr>
+      <td style="font-weight:600">${w.ticker}</td>
+      <td><span class="badge ${w.strategy==='CSP'?'badge-csp':'badge-call'}">${w.strategy}</span></td>
+      <td><button class="btn btn-sec btn-sm" onclick="removeFromWatchlist('${w.ticker}')">Remove</button></td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+async function addToWatchlist() {
+  const ticker = document.getElementById('wl-ticker').value.trim().toUpperCase();
+  const strategy = document.getElementById('wl-strategy').value;
+  const alertEl = document.getElementById('wl-alert');
+  if (!ticker) { alertEl.innerHTML = '<div class="alert alert-err">Enter a ticker</div>'; return; }
+  try {
+    const resp = await fetch('/api/tg-webhook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: { chat: { id: '129316928' }, text: `/add ${ticker} ${strategy}` } }),
+    });
+    // Directly call trading-data to verify
+    alertEl.innerHTML = `<div class="alert alert-ok">✓ Add request sent for ${ticker} (${strategy})</div>`;
+    document.getElementById('wl-ticker').value = '';
+    setTimeout(() => loadWatchlist(), 500);
+  } catch(err) {
+    alertEl.innerHTML = `<div class="alert alert-err">${err.message}</div>`;
+  }
+}
+
+async function removeFromWatchlist(ticker) {
+  if (!confirm(`Remove ${ticker} from watchlist?`)) return;
+  try {
+    await fetch('/api/tg-webhook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: { chat: { id: '129316928' }, text: `/remove ${ticker}` } }),
+    });
+    setTimeout(() => loadWatchlist(), 500);
+  } catch(err) {
+    alert('Error: ' + err.message);
+  }
+}
+
+// ============================================================
+// INIT
+// ============================================================
+window.addEventListener('DOMContentLoaded', () => {
+  setStatus(false, 'Connecting…');
+  loadAccount();
+  loadScan();
+  loadWatchlist();
+});
+</script>
+</body>
+</html>

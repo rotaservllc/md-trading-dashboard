@@ -1,8 +1,9 @@
 {
   "name": "md-trading-dashboard",
-  "version": "1.0.0",
+  "version": "3.0.0",
   "type": "module",
+  "private": true,
   "dependencies": {
-    "@netlify/blobs": "^8.1.0"
+    "@netlify/blobs": "^10.7.9"
   }
 }
