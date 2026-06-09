@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// scan-core.mjs — shared v3 scan engine   BUILD: 2026-06-07T00:00:00Z (UA fix)
+// scan-core.mjs — shared v3 scan engine   BUILD: 2026-06-08T12:00:00Z (4% cap + debit module)
 // ─────────────────────────────────────────────────────────────────────────────
 // Strategy: defined-risk PUT CREDIT SPREADS (income) + one CONVEX sleeve
 //   (long call / debit spread) gated by opportunity + Knox trigger.
@@ -14,8 +14,10 @@ import { getTTToken } from './tt-auth.mjs';
 
 // ─── CONFIG (tunable dials) ──────────────────────────────────────────────────
 const CFG = {
-  MAX_RISK_PCT:       0.02,   // max loss per credit spread / NLV
-  CONVEX_RISK_PCT:    0.01,   // max debit per convex bet / NLV
+  MAX_RISK_PCT:       0.04,   // max loss per credit spread / NLV (raised from 2% — deliberate fixed cap)
+  CONVEX_RISK_PCT:    0.01,   // max debit per convex bet / NLV (tier-1/2 names)
+  DEBIT_MAX_RISK_PCT: 0.02,   // max debit per satellite lottery play / NLV (~$96)
+  DEBIT_MIN_RR:       2.0,    // satellite debit needs ≥ 2:1
   TARGET_SHORT_DELTA: 0.25,   // short-put delta  → ~75% POP
   DELTA_TOL:          0.08,
   MIN_CREDIT_WIDTH:   0.30,   // credit ≥ 30% of width
@@ -58,6 +60,23 @@ const UNIVERSE = [
   { ticker:'RDFN',sector:'PropTech',tier:3 },{ ticker:'OPEN',sector:'PropTech',tier:3 },
 ];
 const TIER_W = { 1: 100, 2: 70, 3: 40 };
+
+// Satellite universe — liquid, lower-priced names where defined-risk DEBIT spreads fit a small
+// account (credit spreads can't). Off-research/technical; only scanned when KNOX_TRIGGER is armed.
+const SATELLITE = [
+  { ticker:'XLF', sector:'Financials ETF' }, { ticker:'KRE', sector:'Regional Banks' }, { ticker:'BAC', sector:'Banks' },
+  { ticker:'SOFI',sector:'Fintech' }, { ticker:'HOOD',sector:'Fintech' }, { ticker:'AFRM',sector:'Fintech' }, { ticker:'UPST',sector:'Fintech' },
+  { ticker:'F',   sector:'Auto' }, { ticker:'GM', sector:'Auto' }, { ticker:'RIVN',sector:'EV' }, { ticker:'LCID',sector:'EV' }, { ticker:'NIO',sector:'EV' },
+  { ticker:'AAL', sector:'Airlines' }, { ticker:'CCL',sector:'Travel' }, { ticker:'NCLH',sector:'Travel' },
+  { ticker:'CLF', sector:'Steel' }, { ticker:'X', sector:'Steel' }, { ticker:'AA',sector:'Aluminum' }, { ticker:'VALE',sector:'Mining' },
+  { ticker:'MARA',sector:'Crypto' }, { ticker:'RIOT',sector:'Crypto' }, { ticker:'COIN',sector:'Crypto' }, { ticker:'PLUG',sector:'Clean Energy' },
+  { ticker:'SNAP',sector:'Social' }, { ticker:'PINS',sector:'Social' }, { ticker:'WBD',sector:'Media' }, { ticker:'DKNG',sector:'Gaming' },
+  { ticker:'CHWY',sector:'Consumer' }, { ticker:'GRAB',sector:'Tech' }, { ticker:'JMIA',sector:'E-Commerce' }, { ticker:'OPEN',sector:'PropTech' },
+  { ticker:'SOUN',sector:'AI spec' }, { ticker:'BBAI',sector:'AI spec' }, { ticker:'PATH',sector:'AI spec' }, { ticker:'IONQ',sector:'Quantum' },
+  { ticker:'RGTI',sector:'Quantum' }, { ticker:'RKLB',sector:'Space' }, { ticker:'ACHR',sector:'eVTOL' }, { ticker:'PLTR',sector:'AI SaaS' },
+  { ticker:'INTC',sector:'Semis' }, { ticker:'T', sector:'Telecom' }, { ticker:'PFE',sector:'Pharma' }, { ticker:'GDX',sector:'Gold Miners' },
+  { ticker:'SLV', sector:'Silver' }, { ticker:'FXI',sector:'China' }, { ticker:'EWZ',sector:'Brazil' },
+];
 
 // ─── tastytrade: live NLV ────────────────────────────────────────────────────
 async function getNLV(token) {
@@ -158,23 +177,26 @@ function buildPCS(chain, nlv) {
 }
 
 // ─── Build CONVEX sleeve (long call or debit spread) ─────────────────────────
-function buildConvex(chain, nlv, dir) { // dir: 'calls' | 'puts'
-  const maxDebit = CFG.CONVEX_RISK_PCT * nlv;
+function buildDebit(chain, nlv, dir, budgetPct) { // dir: 'calls' | 'puts'
+  const maxDebit = budgetPct * nlv;
   const type = dir === 'calls' ? 'call' : 'put';
-  const legs = chain.opts.filter(o => o.type === type && o.oi >= CFG.MIN_OI && o.ask > 0 && o.iv > 0);
+  const legs = chain.opts.filter(o => o.type === type && o.oi >= 150 && o.ask > 0 && o.iv > 0);
   if (legs.length < 2) return null;
-  const long = legs.sort((a,b) => Math.abs(Math.abs(a.delta)-0.40) - Math.abs(Math.abs(b.delta)-0.40))[0];
-  const short = legs.filter(o => o.expiry === long.expiry && Math.abs(o.delta) < Math.abs(long.delta) && Math.abs(o.delta) > 0.10)
-    .sort((a,b) => Math.abs(Math.abs(a.delta)-0.20) - Math.abs(Math.abs(b.delta)-0.20))[0];
-  if (!short) return null;
-  const debit = +(long.ask - short.bid).toFixed(2);
-  if (debit <= 0 || debit * 100 > maxDebit) return null;
-  const width = +Math.abs(long.strike - short.strike).toFixed(2);
-  const maxGain = +((width - debit) * 100).toFixed(2);
-  const rr = +(maxGain / (debit * 100)).toFixed(1);
-  if (rr < CFG.CONVEX_MIN_RR) return null;
-  return { kind:`DEBIT_${dir.toUpperCase()}`, long:long.strike, short:short.strike, debit,
-    maxLoss:+(debit*100).toFixed(2), maxGain, rr, expiry:long.expiry, dte:long.dte };
+  const long = legs.sort((a,b) => Math.abs(Math.abs(a.delta)-0.42) - Math.abs(Math.abs(b.delta)-0.42))[0];
+  let best = null;
+  for (const s of legs) {
+    if (s.expiry !== long.expiry) continue;
+    const further = dir === 'calls' ? s.strike > long.strike : s.strike < long.strike;
+    if (!further || Math.abs(s.delta) >= Math.abs(long.delta) || Math.abs(s.delta) < 0.12) continue;
+    const debit = +(long.ask - s.bid).toFixed(2);
+    const width = +Math.abs(long.strike - s.strike).toFixed(2);
+    if (debit <= 0 || width <= 0 || debit * 100 > maxDebit) continue;
+    const rr = +((width - debit) / debit).toFixed(1);
+    if (rr < CFG.DEBIT_MIN_RR) continue;
+    if (!best || rr > best.rr) best = { kind:`DEBIT_${dir.toUpperCase()}`, long:long.strike, short:s.strike, debit,
+      maxLoss:+(debit*100).toFixed(2), maxGain:+((width-debit)*100).toFixed(2), rr, expiry:long.expiry, dte:long.dte };
+  }
+  return best;
 }
 
 // ─── Scoring ─────────────────────────────────────────────────────────────────
@@ -251,10 +273,30 @@ export async function runScan(mode = 'manual') {
       const chain = await fetchChain(u.ticker);
       if (!chain.price) continue;
       if (u.sellable) { const s = buildPCS(chain, nlv); if (s) candidates.push(pcsCandidate(u, chain, u.m, s, regime)); }
-      if (u.convexOK) { const x = buildConvex(chain, nlv, trigger); if (x) candidates.push(convexCandidate(u, chain, u.m, x, regime)); }
+      if (u.convexOK) { const x = buildDebit(chain, nlv, trigger, CFG.CONVEX_RISK_PCT); if (x) candidates.push(convexCandidate(u, chain, u.m, x, regime)); }
     } catch (e) { console.warn(`chain ${u.ticker}:`, e.message); }
   }
-  candidates.sort((a,b) => (parseFloat(b.score)||0) - (parseFloat(a.score)||0));
+
+  // Satellite debit sweep — only when a Knox direction is armed (puts now, calls after the flip)
+  if (trigger === 'puts' || trigger === 'calls') {
+    for (let i = 0; i < SATELLITE.length; i += 8) {
+      const batch = SATELLITE.slice(i, i + 8);
+      const chains = await Promise.all(batch.map(async (s) => {
+        try { return [s, await fetchChain(s.ticker)]; } catch { return [s, null]; }
+      }));
+      for (const [s, chain] of chains) {
+        if (!chain || !chain.price) continue;
+        const x = buildDebit(chain, nlv, trigger, CFG.DEBIT_MAX_RISK_PCT);
+        if (x) candidates.push(convexCandidate({ ...s, tier: 'S' }, chain, null, x, regime));
+      }
+    }
+  }
+
+  // Rank: credit spreads first (by score), then debit plays (by reward:risk)
+  candidates.sort((a, b) => {
+    const rank = (c) => c.strategy === 'PCS' ? 1000 + (parseFloat(c.score) || 0) : (parseFloat(c.rr) || 0);
+    return rank(b) - rank(a);
+  });
 
   const scanResult = {
     generatedAt:new Date().toISOString(), mode, vix:vix.toFixed(2), regime, nlv,
@@ -271,7 +313,7 @@ export async function runScan(mode = 'manual') {
 // ─── Telegram (HTML, same channel as deployed) ───────────────────────────────
 function buildMessage(r) {
   const pcs = r.candidates.filter(c => c.strategy === 'PCS').slice(0, 4);
-  const lot = r.candidates.filter(c => c.strategy === 'DEBIT').slice(0, 2);
+  const lot = r.candidates.filter(c => c.strategy === 'DEBIT').slice(0, 6);
   let m = `🔍 <b>Scan v3 — ${r.mode}</b>\n`;
   m += `VIX ${r.vix} · <b>${r.regime}</b> · NLV $${r.nlv.toLocaleString()} · lottery ${r.trigger}\n\n`;
   if (!pcs.length) m += `No credit-spread setup cleared the gates — <i>no-trade is a valid output.</i>\n`;
@@ -281,8 +323,8 @@ function buildMessage(r) {
     m += `  POP ~${c.pop}% · c/w ${c.cw} · IVR ${c.ivrPct}\n`;
   }
   if (lot.length) {
-    m += `\n🎟️ <b>Convex (trigger armed):</b>\n`;
-    for (const c of lot) m += `  ${c.ticker} ${c.suggestedStrike} · debit $${c.optionCost} · ${c.rr}:1\n`;
+    m += `\n🎟️ <b>Debit plays — ${r.trigger.toUpperCase()} (defined risk):</b>\n`;
+    for (const c of lot) m += `  ${c.ticker} ${c.suggestedStrike} · $${c.optionCost} · ${c.rr}:1 · ${c.expDays}d\n`;
   }
   m += `\n<a href="https://md-trading-dashboard.netlify.app">Dashboard</a>`;
   return m;
