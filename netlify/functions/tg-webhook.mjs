@@ -3,6 +3,9 @@
 import { getStore } from '@netlify/blobs';
 import { getWatchlist, saveWatchlist } from './lib/watchlist.mjs';
 import { getTTToken } from './lib/tt-auth.mjs';
+import { CFG, getNLV, fetchMetrics, fetchVIX, regimeOf, fetchChain, buildPCS, buildDebit } from './lib/scan-core.mjs';
+import { sourceOf } from './lib/universe.mjs';
+import { formatMsg } from './lib/crypto-core.mjs';
 
 const ALLOWED_CHAT_ID = Netlify.env.get('TELEGRAM_CHAT_ID');
 const BOT_TOKEN = Netlify.env.get('TELEGRAM_BOT_TOKEN');
@@ -192,6 +195,118 @@ async function handleWatchlist(chatId) {
   );
 }
 
+
+// ─── Charter v1.0 gate check from the phone: /gate TICKER [calls|puts|credit] ─────────────────
+async function handleGate(chatId, ticker, want) {
+  if (!ticker) { await reply(chatId, 'Usage: /gate TICKER [calls|puts|credit]'); return; }
+  const t = ticker.toUpperCase(); want = (want || '').toLowerCase();
+  const token = await getTTToken();
+  const [nlv, vix, metrics, chain] = await Promise.all([getNLV(token), fetchVIX(), fetchMetrics(token, [t]), fetchChain(t).catch(e => ({ err: e.message }))]);
+  const m = metrics[t]; const regime = regimeOf(vix);
+  const veto = (Netlify.env.get('IO_FUND_VETO_LIST') || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
+  const trigger = (Netlify.env.get('KNOX_TRIGGER') || 'off').toLowerCase();
+  const src = sourceOf(t);
+  const g = []; const fail = (x) => g.push(`❌ ${x}`), pass = (x) => g.push(`✅ ${x}`), warn = (x) => g.push(`⚠️ ${x}`);
+  if (!m) fail('no tastytrade metrics — not optionable / unknown symbol'); else {
+    (m.liquidity >= CFG.MIN_LIQUIDITY ? pass : fail)(`liquidity ${m.liquidity ?? '?'}/4 (need ≥${CFG.MIN_LIQUIDITY})`);
+    if (m.earningsKnown) ((m.earningsDays > CFG.EARNINGS_BUFFER || m.earningsDays < 0) ? pass : fail)(`earnings in ${m.earningsDays}d (need >${CFG.EARNINGS_BUFFER})`); else warn('earnings date unknown — verify manually');
+    const ivr = m.ivRank;
+    if (ivr == null) warn('IV rank unavailable');
+    else if (ivr >= CFG.IV_SELL_CLEAR) pass(`IV rank ${ivr} → SELL-CLEAR band (credit ok)`);
+    else if (ivr >= CFG.IV_SELL_FLOOR) warn(`IV rank ${ivr} → MID band 20–40 (either; state the case in the log)`);
+    else pass(`IV rank ${ivr} → BUY-ONLY band (no short premium)`);
+    if (m.ivPct != null && m.ivPct < CFG.IV_PCTL_WARN) warn(`IV percentile ${m.ivPct} <10 — 1-yr low, default no-trade unless the directional case is strong`);
+  }
+  if (veto.includes(t) || src === 'IO Fund') warn(`${t} is an IO Fund name — no directional trade AGAINST it (no puts/bear); bullish structures only`);
+  g.push(`ℹ️ source ${src} · regime ${regime} (VIX ${vix.toFixed(1)}) · armed direction ${trigger}`);
+  if (src === 'IO Fund') g.push('ℹ️ IO lane: months-quarters horizon → ≥60 DTE or hold as stock in Sarwa; never a <30 DTE option');
+  if (src === 'CML Pro') g.push('ℹ️ CML lane: 45–90 DTE debit structures');
+
+  let structures = '';
+  if (chain?.err) structures = `\nchain: ${chain.err}`;
+  else if (chain?.price) {
+    structures += `\n<b>Structures that fit (${nlv.toFixed(0)} NLV, DTE ${CFG.DTE_MIN}–${CFG.DTE_MAX}, spot $${chain.price})</b>`;
+    const canSell = m?.ivRank != null && m.ivRank >= CFG.IV_SELL_FLOOR && want !== 'calls' && want !== 'puts';
+    if (canSell) {
+      const s1 = buildPCS(chain, nlv, CFG.MAX_RISK_PCT), s2 = buildPCS(chain, nlv, CFG.TIER2_RISK_PCT);
+      structures += s1 ? `\n📉 PCS T1 ${s1.short}/${s1.long} ${s1.expiry} (${s1.dte}d) cr $${s1.credit} maxL $${s1.maxLoss} POP ${Math.round(s1.pop*100)}% c/w ${s1.cw}` : '\n📉 PCS Tier-1 (2%): none fits';
+      structures += (s2 && s2.pop >= CFG.TIER2_MIN_POP && s2.cw >= CFG.TIER2_MIN_CW) ? `\n🔶 PCS T2 ${s2.short}/${s2.long} ${s2.expiry} (${s2.dte}d) cr $${s2.credit} maxL $${s2.maxLoss} POP ${Math.round(s2.pop*100)}% — 3 signals required` : '\n🔶 PCS Tier-2 (4%): none meets POP≥70/cw≥.35';
+    } else if (want === 'credit') structures += '\n📉 credit blocked: IV rank below 20 (Charter §3)';
+    for (const dir of (want === 'calls' ? ['calls'] : want === 'puts' ? ['puts'] : ['calls', 'puts'])) {
+      if (dir === 'puts' && (veto.includes(t) || src === 'IO Fund')) { structures += `\n🎟️ ${dir}: blocked (IO veto)`; continue; }
+      const x = buildDebit(chain, nlv, dir, CFG.DEBIT_MAX_RISK_PCT);
+      structures += x ? `\n🎟️ ${dir.toUpperCase()} debit ${x.long}/${x.short} ${x.expiry} (${x.dte}d) $${x.debit} · ${x.rr}:1 · maxL $${x.maxLoss} maxG $${x.maxGain}${trigger === dir ? ' · armed ✅' : ' · NOT armed — needs written regime case'}` : `\n🎟️ ${dir.toUpperCase()} debit: none ≥2:1 within 2%`;
+    }
+  }
+  const hard = g.filter(x => x.startsWith('❌')).length;
+  const head = hard ? `🚫 <b>${t} — ${hard} hard gate(s) failed</b>` : `🟢 <b>${t} — mechanical gates pass</b> (judgement still required)`;
+  const foot = `\n\n<b>Exits (pre-commit):</b> target 50% of max gain · stop 50% of debit / 2× credit, stop-limit · time-stop 5d (event trades)\n<b>To log:</b> /log ${t} 1 knox CDS | signal one ; signal two   (tier 2 needs 3 signals)`;
+  await reply(chatId, `${head}\n${g.join('\n')}${structures}${foot}`);
+}
+
+// ─── Trade log from the phone: /log TICKER TIER LANE STRUCTURE | sig1 ; sig2 [; sig3] ─────────
+async function handleLog(chatId, text) {
+  const body = text.replace(/^\/log(@\w+)?\s*/i, '');
+  const [head, sigs] = body.split('|').map(x => (x || '').trim());
+  const [ticker, tier, lane, structure] = head.split(/\s+/);
+  const signals = (sigs || '').split(';').map(x => x.trim()).filter(Boolean);
+  if (!ticker || !tier || !lane || !structure || signals.length < 2) { await reply(chatId, 'Usage: /log TICKER TIER(1|2|HEDGE) LANE(knox|cml|io|scan|uw) STRUCTURE(PCS|PDS|CDS|LONG_CALL|LONG_PUT) | signal one ; signal two [; signal three]'); return; }
+  if (String(tier) === '2' && signals.length < 3) { await reply(chatId, '🔶 Tier-2 needs 3 independent signals. Add one or log as Tier 1.'); return; }
+  const store = getStore('trading-data');
+  const log = (await store.get('trade-log', { type: 'json' })) || [];
+  const open = log.filter(e => !e.outcome);
+  const month = new Date().toISOString().slice(0, 7);
+  const thisMonth = log.filter(e => e.entry?.date?.startsWith(month)).length;
+  const openT2 = open.filter(e => String(e.tier) === '2').length, t2Month = log.filter(e => String(e.tier) === '2' && e.entry?.date?.startsWith(month)).length;
+  const caps = [];
+  if (open.length >= 2) caps.push(`${open.length} positions already open (cap 2)`);
+  if (thisMonth >= 4) caps.push(`${thisMonth} trades this month (cap 4)`);
+  if (String(tier) === '2' && openT2 >= 1) caps.push('a Tier-2 is already open (cap 1)');
+  if (String(tier) === '2' && t2Month >= 2) caps.push(`${t2Month} Tier-2 this month (cap 2)`);
+  const token = await getTTToken(); const [nlv, vix, metrics] = await Promise.all([getNLV(token), fetchVIX(), fetchMetrics(token, [ticker.toUpperCase()])]);
+  const m = metrics[ticker.toUpperCase()] || {};
+  const id = `T-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${ticker.toUpperCase()}`;
+  const entry = { id, tier: String(tier).toUpperCase() === 'HEDGE' ? 'HEDGE' : Number(tier), lane: lane.toLowerCase(), ticker: ticker.toUpperCase(), structure: structure.toUpperCase(),
+    entry: { date: new Date().toISOString(), signals, iv: { ivRank: m.ivRank ?? null, ivPercentile: m.ivPct ?? null, iv: m.iv ?? null }, earningsDays: m.earningsKnown ? m.earningsDays : null,
+             regime: { vix, regime: regimeOf(vix), knoxTrigger: (Netlify.env.get('KNOX_TRIGGER') || 'off') }, nlv, capWarnings: caps, plan: { target: '50% max gain', stop: '50% debit / 2x credit, stop-limit', timeStopDays: 5 } },
+    fills: [], outcome: null };
+  log.push(entry); await store.setJSON('trade-log', log);
+  await reply(chatId, `${caps.length ? '🚫 <b>CAP BREACH — logged but DO NOT place:</b>\n' + caps.join('\n') + '\n\n' : '📝 '}<b>Logged ${id}</b> · Tier ${entry.tier} · ${entry.lane} · ${entry.structure}\nIVR ${m.ivRank ?? '?'} · pctl ${m.ivPct ?? '?'} · earnings ${m.earningsKnown ? m.earningsDays + 'd' : '?'} · ${regimeOf(vix)}\nSignals:\n• ${signals.join('\n• ')}\n\nNow place the order in tastytrade WITH the stop-limit exit. Fills get reconciled from the API — never type them.`);
+}
+
+async function handleJournal(chatId) {
+  const log = (await getStore('trading-data').get('trade-log', { type: 'json' })) || [];
+  const month = new Date().toISOString().slice(0, 7);
+  const open = log.filter(e => !e.outcome), tm = log.filter(e => e.entry?.date?.startsWith(month));
+  let msg = `📒 <b>Trade log</b> · ${log.length} entries · open ${open.length}/2 · this month ${tm.length}/4\n`;
+  for (const e of log.slice(-6).reverse()) msg += `\n${e.outcome ? '✔' : '⏳'} ${e.id} · T${e.tier} ${e.lane} ${e.structure} · IVR ${e.entry?.iv?.ivRank ?? '?'}${e.outcome ? ` · $${e.outcome.netPL}` : ''}`;
+  await reply(chatId, msg);
+}
+
+async function handleMarket(chatId) {
+  const r = await getStore('trading-data').get('market-scan', { type: 'json' });
+  if (!r) { await reply(chatId, 'No market scan yet (runs 05:00 Dubai Tue–Sat).'); return; }
+  const armed = r.debit.filter(c => c.armed).slice(0, 5), t1 = r.credit.filter(c => !c.tier2).slice(0, 3);
+  let msg = `🌐 <b>Market scan</b> ${r.generatedAt.slice(0, 16)}Z · VIX ${r.vix} ${r.regime} · dir ${r.trigger}\nstage-1 ${r.gates.passedStage1}/${r.universe} · rich ${r.lanes.rich} · cheap ${r.lanes.cheap} · spikes ${r.lanes.ivSpike}\n`;
+  msg += t1.length ? `\n📉 credit: ` + t1.map(c => `${c.ticker} ${c.suggestedStrike} $${c.credit}`).join(' · ') : '\n📉 credit: 0 (expected at this NLV)';
+  msg += armed.length ? `\n🎟️ ${r.trigger}: ` + armed.map(c => `${c.ticker} ${c.suggestedStrike} ${c.rr}:1`).join(' · ') : `\n🎟️ ${r.trigger}: 0`;
+  msg += `\n\n/gate TICKER to run the charter check on any of them.`;
+  await reply(chatId, msg);
+}
+
+async function handleHsbc(chatId) {
+  const st = await getStore('trading-data').get('hsbc-state', { type: 'json' });
+  if (!st) { await reply(chatId, 'No HSBC monitor state yet.'); return; }
+  await reply(chatId, `🏦 <b>HSBC tranches</b> (Plan B) · ${st.lastRun?.slice(0, 10)}\nVWRA $${st.vwra?.toFixed(2)} (${st.vwraFromFill}% vs T2 fill; T3 ≤ $${st.t3Level}) · DXY ${st.dxy?.toFixed(2)} (${st.dxyDrop}% vs 6m high; signal ≤ ${st.dxySignalLevel}) · Gold $${st.gold?.toFixed(0)} · COPX $${st.copx?.toFixed(2)} · SMH $${st.smh?.toFixed(0)}\nT3 ${st.t3} · T4 ${st.t4} · T5 ${st.t5} · EM ${st.em} · EQQQ ${st.eqqq}`);
+}
+
+async function handleCrypto(chatId) {
+  const st = await getStore({ name: 'crypto-paper', consistency: 'strong' }).get('state', { type: 'json' });
+  if (!st) { await reply(chatId, 'No crypto paper state yet.'); return; }
+  const f = Object.entries(st.analysis.BTC.fired).map(([k, v]) => `${v ? '✅' : '▫️'} ${k}`).join(' · ');
+  await reply(chatId, formatMsg(st, false) + `\nBTC rules: ${f}\nE lane drawdown vs 1y high: BTC ${(st.analysis.BTC.dd * 100).toFixed(0)}% · ETH ${(st.analysis.ETH.dd * 100).toFixed(0)}%`);
+}
+
 async function handleHelp(chatId) {
   await reply(chatId,
     `🤖 <b>MD Trading Bot Commands</b>\n\n` +
@@ -199,6 +314,9 @@ async function handleHelp(chatId) {
     `/prices — Watchlist prices (delayed)\n` +
     `/scan — Latest scan results (top 5)\n` +
     `/check TICKER [CSP|CALL] — Quick IV check\n` +
+    `/gate TICKER [calls|puts|credit] — Charter v1.0 gate check + structures that fit\n` +
+    `/log TICKER TIER LANE STRUCTURE | sig1 ; sig2 — write the entry log (before the order)\n` +
+    `/journal — trade log & caps · /market — latest market scan · /hsbc — tranche triggers · /crypto — crypto lane paper test\n` +
     `/add TICKER CSP|CALL — Add to watchlist\n` +
     `/remove TICKER — Remove from watchlist\n` +
     `/watchlist — Show watchlist\n` +
@@ -239,6 +357,12 @@ export default async (req) => {
       case '/prices':   await handlePrices(chatId); break;
       case '/scan':     await handleScan(chatId); break;
       case '/check':    await handleCheck(chatId, parts[1], parts[2]); break;
+      case '/gate':     await handleGate(chatId, parts[1], parts[2]); break;
+      case '/log':      await handleLog(chatId, text); break;
+      case '/journal':  await handleJournal(chatId); break;
+      case '/market':   await handleMarket(chatId); break;
+      case '/hsbc':     await handleHsbc(chatId); break;
+      case '/crypto':   await handleCrypto(chatId); break;
       case '/add':      await handleAdd(chatId, parts[1], parts[2]); break;
       case '/remove':   await handleRemove(chatId, parts[1]); break;
       case '/watchlist': await handleWatchlist(chatId); break;

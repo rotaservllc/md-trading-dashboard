@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// scan-core.mjs — shared v3 scan engine   BUILD: 2026-06-08T12:00:00Z (4% cap + debit module)
+// scan-core.mjs — shared v3 scan engine   BUILD: 2026-09-27 (Charter v1.0: two-tier sizing, IV bands, liq≥3, spread≤10%, source tags)
 // ─────────────────────────────────────────────────────────────────────────────
 // Strategy: defined-risk PUT CREDIT SPREADS (income) + one CONVEX sleeve
 //   (long call / debit spread) gated by opportunity + Knox trigger.
@@ -13,8 +13,11 @@ import { getStore } from '@netlify/blobs';
 import { getTTToken } from './tt-auth.mjs';
 
 // ─── CONFIG (tunable dials) ──────────────────────────────────────────────────
-const CFG = {
-  MAX_RISK_PCT:       0.04,   // max loss per credit spread / NLV (raised from 2% — deliberate fixed cap)
+export const CFG = {
+  MAX_RISK_PCT:       0.02,   // Tier-1 STANDARD: max loss per trade / NLV (Charter §2)
+  TIER2_RISK_PCT:     0.04,   // Tier-2 CONVICTION: hard ceiling; needs 3 independent signals, ≤1 open, ≤2/month (Charter §2)
+  TIER2_MIN_POP:      0.70,   // Tier-2 credit spread: POP ≥70% and credit ≥35% of width (credit analogue of 2:1)
+  TIER2_MIN_CW:       0.35,
   CONVEX_RISK_PCT:    0.01,   // max debit per convex bet / NLV (tier-1/2 names)
   DEBIT_MAX_RISK_PCT: 0.02,   // max debit per satellite lottery play / NLV (~$96)
   DEBIT_MIN_RR:       2.0,    // satellite debit needs ≥ 2:1
@@ -22,16 +25,19 @@ const CFG = {
   DELTA_TOL:          0.08,
   MIN_CREDIT_WIDTH:   0.30,   // credit ≥ 30% of width
   CONVEX_MIN_RR:      3.0,    // convex bet needs ≥ 3:1
-  MIN_IV_RANK:        30,     // only SELL premium when IV rank rich
-  MAX_IV_RANK_CONVEX: 30,     // only BUY premium when IV rank cheap
-  DTE_MIN: 21, DTE_MAX: 49,
-  MIN_OI: 500, MAX_SPREAD_PCT: 12,
+  // Charter §3 IV bands: ≥40 sell · 20–40 either (case must be stated) · <20 buy only, never short premium
+  IV_SELL_CLEAR:      40,
+  IV_SELL_FLOOR:      20,     // below this: NO short premium, no exceptions
+  MAX_IV_RANK_CONVEX: 40,     // buy premium only when IV rank < 40 (best <20)
+  IV_PCTL_WARN:       10,     // IV percentile <10 = 1-yr low → default no-trade unless directional case is strong
+  DTE_MIN: 21, DTE_MAX: 56,          // upper bound 56 so the next monthly always qualifies (Charter §5 clarification, 27 Sep)
+  MIN_OI: 500, MAX_SLIPPAGE_W: 0.10, // spread-level: (mid credit − natural credit) ≤ 10% of width (Charter §5)
   EARNINGS_BUFFER: 14,
-  MIN_LIQUIDITY: 2,           // tastytrade liquidity-rating 1–4
+  MIN_LIQUIDITY: 3,           // tastytrade liquidity-rating 1–4 (Charter §5)
   TOP_N_ENRICH: 12,
   FALLBACK_NLV: 4800.45,
 };
-const WIDTHS = [5, 2.5, 2, 1];
+const WIDTHS = [5, 3, 2.5, 2, 1.5, 1, 0.5];
 const CBOE = 'https://cdn.cboe.com/api/global/delayed_quotes/options';
 const TT = 'https://api.tastyworks.com';
 
@@ -60,6 +66,7 @@ const UNIVERSE = [
   { ticker:'RDFN',sector:'PropTech',tier:3 },{ ticker:'OPEN',sector:'PropTech',tier:3 },
 ];
 const TIER_W = { 1: 100, 2: 70, 3: 40 };
+const SOURCE_OF = (u) => u.source || (u.tier === 1 ? 'IO Fund' : u.tier === 2 ? 'watchlist' : 'universe');
 
 // Satellite universe — liquid, lower-priced names where defined-risk DEBIT spreads fit a small
 // account (credit spreads can't). Off-research/technical; only scanned when KNOX_TRIGGER is armed.
@@ -79,7 +86,7 @@ const SATELLITE = [
 ];
 
 // ─── tastytrade: live NLV ────────────────────────────────────────────────────
-async function getNLV(token) {
+export async function getNLV(token) {
   try {
     const acct = Netlify.env.get('TT_ACCOUNT') || '5WI51792';
     const r = await fetch(`${TT}/accounts/${acct}/balances`, { headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'md-trading-dashboard/1.0' } });
@@ -91,7 +98,7 @@ async function getNLV(token) {
 }
 
 // ─── tastytrade: market-metrics → real IV rank/percentile/liquidity/earnings ──
-async function fetchMetrics(token, tickers) {
+export async function fetchMetrics(token, tickers) {
   const out = {};
   for (let i = 0; i < tickers.length; i += 50) {
     const chunk = tickers.slice(i, i + 50);
@@ -105,6 +112,7 @@ async function fetchMetrics(token, tickers) {
           ivRank: ivPctNum(it['implied-volatility-index-rank'] ?? it['tw-implied-volatility-index-rank']),
           ivPct:  ivPctNum(it['implied-volatility-percentile']),
           iv:     Math.round((parseFloat(it['implied-volatility-index'] ?? 0)) * 100),
+          iv5d:   Math.round((parseFloat(it['implied-volatility-index-5-day-change'] ?? 0)) * 1000) / 10,  // IV points change over 5d
           liquidity: parseInt(it['liquidity-rating'] ?? 0, 10),
           mktCap: parseFloat(it['market-cap'] ?? 0),
           earningsDays: erd ? Math.round((new Date(erd).getTime() - Date.now()) / 86400000) : 999,
@@ -118,14 +126,20 @@ async function fetchMetrics(token, tickers) {
 const ivPctNum = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? Math.round(n * 1000) / 10 : null; }; // 0.453 → 45.3
 
 // ─── VIX (CBOE, same source as deployed) ─────────────────────────────────────
-async function fetchVIX() {
+export async function fetchVIX() {
   try {
-    const r = await fetch(`${CBOE}/%5EVIX.json`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const r = await fetch(`${CBOE}/_VIX.json`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (r.ok) { const d = await r.json(); const v = parseFloat(d?.data?.current_price); if (v > 0) return v; }
+  } catch {}
+  try {
+    const r = await fetch('https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?range=1d&interval=1d', { headers: { 'User-Agent': 'Mozilla/5.0' } });
     const d = await r.json();
-    return parseFloat(d?.data?.current_price ?? 20);
-  } catch { return 20; }
+    const v = parseFloat(d?.chart?.result?.[0]?.meta?.regularMarketPrice);
+    if (v > 0) return v;
+  } catch {}
+  return 20; // fallback → regime MIXED; flagged as vixSource:'fallback' by callers that check
 }
-const regimeOf = (v) => v >= 25 ? 'RISK-OFF' : v >= 20 ? 'MIXED' : 'RISK-ON';
+export const regimeOf = (v) => v >= 25 ? 'RISK-OFF' : v >= 20 ? 'MIXED' : 'RISK-ON';
 
 // ─── CBOE chain (parse OCC symbol; real greeks) ──────────────────────────────
 function parseOCC(sym) {
@@ -134,7 +148,7 @@ function parseOCC(sym) {
   const [, , yy, mm, dd, typ, k] = m;
   return { expiry: `20${yy}-${mm}-${dd}`, type: typ === 'C' ? 'call' : 'put', strike: parseInt(k, 10) / 1000 };
 }
-async function fetchChain(ticker) {
+export async function fetchChain(ticker) {
   const r = await fetch(`${CBOE}/${ticker}.json`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
   if (!r.ok) throw new Error(`CBOE ${r.status}`);
   const d = await r.json();
@@ -150,34 +164,38 @@ async function fetchChain(ticker) {
 const spreadPct = (o) => o.ask > 0 ? ((o.ask - o.bid) / o.ask) * 100 : 999;
 
 // ─── Build best PUT CREDIT SPREAD ────────────────────────────────────────────
-function buildPCS(chain, nlv) {
-  const maxRisk = CFG.MAX_RISK_PCT * nlv;
+export function buildPCS(chain, nlv, riskPct = CFG.MAX_RISK_PCT) {
+  const maxRisk = riskPct * nlv;
   const puts = chain.opts.filter(o => o.type === 'put' && o.delta < 0 && o.bid > 0 && o.iv > 0);
   const shorts = puts.filter(o =>
-    Math.abs(Math.abs(o.delta) - CFG.TARGET_SHORT_DELTA) <= CFG.DELTA_TOL &&
-    o.oi >= CFG.MIN_OI && spreadPct(o) <= CFG.MAX_SPREAD_PCT);
+    Math.abs(Math.abs(o.delta) - CFG.TARGET_SHORT_DELTA) <= CFG.DELTA_TOL && o.oi >= CFG.MIN_OI)
+    .sort((a,b) => Math.abs(Math.abs(a.delta)-CFG.TARGET_SHORT_DELTA) - Math.abs(Math.abs(b.delta)-CFG.TARGET_SHORT_DELTA));
   if (!shorts.length) return null;
-  const short = shorts.sort((a,b) => Math.abs(Math.abs(a.delta)-CFG.TARGET_SHORT_DELTA) - Math.abs(Math.abs(b.delta)-CFG.TARGET_SHORT_DELTA))[0];
 
   let best = null;
-  for (const w of WIDTHS) { // widest that fits the risk cap wins (max credit)
-    const long = chain.opts.find(o => o.type === 'put' && o.expiry === short.expiry && Math.abs(o.strike - (short.strike - w)) < 0.01 && o.ask >= 0);
-    if (!long) continue;
-    const credit = +(short.bid - long.ask).toFixed(2);
-    if (credit <= 0) continue;
-    const maxLoss = +((w - credit) * 100).toFixed(2);
-    if (maxLoss > maxRisk) continue;
-    if (credit / w < CFG.MIN_CREDIT_WIDTH) continue;
-    best = { kind:'PCS', short:short.strike, long:long.strike, width:w, credit, maxLoss,
-      expiry:short.expiry, dte:short.dte, pop:+(1-Math.abs(short.delta)).toFixed(2),
-      cw:+(credit/w).toFixed(2), retOnRisk:+((credit*100/maxLoss)*100).toFixed(0), shortIV:+(short.iv*100).toFixed(0) };
-    break;
+  for (const short of shorts.slice(0, 3)) {          // try the 3 closest-to-target shorts (different expiries/strikes)
+    for (const w of WIDTHS) {                          // widest that fits the risk cap wins (max credit)
+      const long = chain.opts.find(o => o.type === 'put' && o.expiry === short.expiry && Math.abs(o.strike - (short.strike - w)) < 0.01 && o.ask >= 0);
+      if (!long) continue;
+      const credit = +(short.bid - long.ask).toFixed(2);            // natural (fillable) credit
+      if (credit <= 0) continue;
+      const mid = +(((short.bid + short.ask) / 2) - ((long.bid + long.ask) / 2)).toFixed(2);
+      if (mid - credit > CFG.MAX_SLIPPAGE_W * w) continue;          // Charter §5: spread bid-ask ≤ 10% of width
+      const maxLoss = +((w - credit) * 100).toFixed(2);
+      if (maxLoss > maxRisk) continue;
+      if (credit / w < CFG.MIN_CREDIT_WIDTH) continue;
+      best = { kind:'PCS', short:short.strike, long:long.strike, width:w, credit, midCredit:mid, maxLoss,
+        expiry:short.expiry, dte:short.dte, pop:+(1-Math.abs(short.delta)).toFixed(2),
+        cw:+(credit/w).toFixed(2), retOnRisk:+((credit*100/maxLoss)*100).toFixed(0), shortIV:+(short.iv*100).toFixed(0) };
+      break;
+    }
+    if (best) break;
   }
   return best;
 }
 
 // ─── Build CONVEX sleeve (long call or debit spread) ─────────────────────────
-function buildDebit(chain, nlv, dir, budgetPct) { // dir: 'calls' | 'puts'
+export function buildDebit(chain, nlv, dir, budgetPct) { // dir: 'calls' | 'puts'
   const maxDebit = budgetPct * nlv;
   const type = dir === 'calls' ? 'call' : 'put';
   const legs = chain.opts.filter(o => o.type === type && o.oi >= 150 && o.ask > 0 && o.iv > 0);
@@ -200,13 +218,13 @@ function buildDebit(chain, nlv, dir, budgetPct) { // dir: 'calls' | 'puts'
 }
 
 // ─── Scoring ─────────────────────────────────────────────────────────────────
-function scorePCS(s, m, tier) {
+export function scorePCS(s, m, tier) {
   const pop = Math.round(s.pop * 100);
   const cw  = Math.min(100, Math.round(s.cw * 200));
   const ivr = m?.ivRank != null ? Math.min(100, m.ivRank) : 50;
   return Math.round(pop*0.35 + cw*0.25 + ivr*0.20 + (TIER_W[tier]??40)*0.20);
 }
-function conf(score, regime) {
+export function conf(score, regime) {
   let c = score;
   if (regime === 'RISK-OFF') c -= 15;
   if (regime === 'MIXED')    c -= 8;
@@ -215,11 +233,12 @@ function conf(score, regime) {
 }
 
 // ─── Map to dashboard-compatible candidate ───────────────────────────────────
-function pcsCandidate(u, chain, m, s, regime) {
+export function pcsCandidate(u, chain, m, s, regime) {
   const score = scorePCS(s, m, u.tier);
   const c = conf(score, regime);
   return {
-    ticker:u.ticker, sector:u.sector, tier:u.tier, strategy:'PCS',
+    ticker:u.ticker, sector:u.sector, tier:u.tier, strategy:'PCS', source:u.source ?? SOURCE_OF(u),
+    sizeTier:'TIER-1 STANDARD (2%)', ivBand:u.ivBand, ivLowWarn:!!u.ivLowWarn, earningsDays:m?.earningsDays ?? null, liquidity:m?.liquidity ?? null,
     price:chain.price, ivrPct:m?.ivRank ?? '?', ivPct:m?.iv ?? '?',
     suggestedStrike:`${s.short}/${s.long}P`, nearExpiry:s.expiry,
     confidence:c.label, score:String(c.pct),
@@ -228,9 +247,10 @@ function pcsCandidate(u, chain, m, s, regime) {
     keyRisk:`Defined max loss $${s.maxLoss}. Assignment risk if it closes below $${s.short} near expiry.`,
   };
 }
-function convexCandidate(u, chain, m, x, regime) {
+export function convexCandidate(u, chain, m, x, regime) {
   return {
-    ticker:u.ticker, sector:u.sector, tier:u.tier, strategy:'DEBIT',
+    ticker:u.ticker, sector:u.sector, tier:u.tier, strategy:'DEBIT', source:u.source ?? SOURCE_OF(u),
+    sizeTier:'CONVEX (1–2%)', ivBand:u.ivBand ?? null, earningsDays:m?.earningsDays ?? null, liquidity:m?.liquidity ?? null,
     price:chain.price, ivrPct:m?.ivRank ?? '?', ivPct:m?.iv ?? '?',
     suggestedStrike:`${x.long}/${x.short}`, nearExpiry:x.expiry,
     confidence:'LOTTERY', score:'—',
@@ -259,10 +279,15 @@ export async function runScan(mode = 'manual') {
     if (!m) continue;
     if (m.earningsKnown && m.earningsDays < CFG.EARNINGS_BUFFER) continue;
     if (m.liquidity && m.liquidity < CFG.MIN_LIQUIDITY) continue;
-    const sellable = m.ivRank != null && m.ivRank >= CFG.MIN_IV_RANK && !(regime === 'RISK-OFF' && u.sector.startsWith('AI'));
-    const convexOK = (trigger === 'calls' || trigger === 'puts') && (m.ivRank == null || m.ivRank <= CFG.MAX_IV_RANK_CONVEX) && u.tier <= 2;
+    const ivr = m.ivRank;
+    const sellClear = ivr != null && ivr >= CFG.IV_SELL_CLEAR;
+    const sellMid   = ivr != null && ivr >= CFG.IV_SELL_FLOOR && ivr < CFG.IV_SELL_CLEAR;   // allowed, case must be stated
+    const sellable = (sellClear || sellMid) && !(regime === 'RISK-OFF' && u.sector.startsWith('AI'));
+    const convexOK = (trigger === 'calls' || trigger === 'puts') && (ivr == null || ivr < CFG.MAX_IV_RANK_CONVEX) && u.tier <= 2;
     if (!sellable && !convexOK) continue;
-    eligible.push({ ...u, m, sellable, convexOK, rankScore: (TIER_W[u.tier]??40) + (m.ivRank ?? 0) });
+    const ivBand = ivr == null ? 'unknown' : ivr >= CFG.IV_SELL_CLEAR ? 'SELL-CLEAR' : ivr >= CFG.IV_SELL_FLOOR ? 'MID-CASE-REQUIRED' : 'BUY-ONLY';
+    const ivLowWarn = m.ivPct != null && m.ivPct < CFG.IV_PCTL_WARN;
+    eligible.push({ ...u, m, sellable, convexOK, ivBand, ivLowWarn, source: SOURCE_OF(u), rankScore: (TIER_W[u.tier]??40) + (ivr ?? 0) });
   }
   eligible.sort((a,b) => b.rankScore - a.rankScore);
 
@@ -272,7 +297,17 @@ export async function runScan(mode = 'manual') {
     try {
       const chain = await fetchChain(u.ticker);
       if (!chain.price) continue;
-      if (u.sellable) { const s = buildPCS(chain, nlv); if (s) candidates.push(pcsCandidate(u, chain, u.m, s, regime)); }
+      if (u.sellable) {
+        const s1 = buildPCS(chain, nlv, CFG.MAX_RISK_PCT);
+        if (s1) candidates.push(pcsCandidate(u, chain, u.m, s1, regime));
+        const s2 = buildPCS(chain, nlv, CFG.TIER2_RISK_PCT);
+        if (s2 && s2.pop >= CFG.TIER2_MIN_POP && s2.cw >= CFG.TIER2_MIN_CW && (!s1 || s2.maxLoss > s1.maxLoss * 1.3)) {
+          const c2 = pcsCandidate(u, chain, u.m, s2, regime);
+          c2.sizeTier = 'TIER-2 CONVICTION (4%)'; c2.tier2 = true;
+          c2.keyRisk = `Tier-2 (4% NLV): needs 3 independent signals written BEFORE entry, ≤1 open, ≤2/month. ` + c2.keyRisk;
+          candidates.push(c2);
+        }
+      }
       if (u.convexOK) { const x = buildDebit(chain, nlv, trigger, CFG.CONVEX_RISK_PCT); if (x) candidates.push(convexCandidate(u, chain, u.m, x, regime)); }
     } catch (e) { console.warn(`chain ${u.ticker}:`, e.message); }
   }
@@ -314,13 +349,13 @@ export async function runScan(mode = 'manual') {
 function buildMessage(r) {
   const pcs = r.candidates.filter(c => c.strategy === 'PCS').slice(0, 4);
   const lot = r.candidates.filter(c => c.strategy === 'DEBIT').slice(0, 6);
-  let m = `🔍 <b>Scan v3 — ${r.mode}</b>\n`;
+  let m = `🔍 <b>Scan v3.1 — ${r.mode}</b> · Charter v1.0\n`;
   m += `VIX ${r.vix} · <b>${r.regime}</b> · NLV $${r.nlv.toLocaleString()} · lottery ${r.trigger}\n\n`;
-  if (!pcs.length) m += `No credit-spread setup cleared the gates — <i>no-trade is a valid output.</i>\n`;
+  if (!pcs.length) m += `0 credit-spread setups cleared the gates — <i>a normal day. No-trade is the output.</i>\n`;
   for (const c of pcs) {
-    m += `📉 <b>${c.ticker}</b> ${c.short ?? ''} PCS [${c.confidence} ${c.score}]\n`;
+    m += `📉 <b>${c.ticker}</b> PCS [${c.confidence} ${c.score}] · ${c.tier2 ? '🔶 TIER-2 4%' : 'Tier-1 2%'} · ${c.source}\n`;
     m += `  ${c.suggestedStrike} · ${c.dte}d · credit $${c.credit} · maxLoss $${c.maxLoss}\n`;
-    m += `  POP ~${c.pop}% · c/w ${c.cw} · IVR ${c.ivrPct}\n`;
+    m += `  POP ~${c.pop}% · c/w ${c.cw} · IVR ${c.ivrPct}${c.ivBand === 'MID-CASE-REQUIRED' ? ' ⚠️ IV mid — state the case' : ''}${c.ivLowWarn ? ' ⚠️ IV pctl <10' : ''} · earn ${c.earningsDays === 999 ? 'n/a' : c.earningsDays + 'd'}\n`;
   }
   if (lot.length) {
     m += `\n🎟️ <b>Debit plays — ${r.trigger.toUpperCase()} (defined risk):</b>\n`;
