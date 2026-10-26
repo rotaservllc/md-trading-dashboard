@@ -1,0 +1,36 @@
+name: crypto-paper
+# Crypto Lane paper engine (Charter v1.1). Daily at 00:20 UTC after the 00:00 UTC close. Signal only, no orders.
+on:
+  schedule:
+    - cron: '20 0 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Re-mark today even if already marked'
+        required: false
+        default: 'false'
+permissions:
+  contents: write
+concurrency: crypto-paper
+jobs:
+  mark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Mark the paper lanes
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then python3 crypto/paper_engine.py --force; else python3 crypto/paper_engine.py; fi
+      - name: Commit state
+        run: |
+          git config user.name "crypto-paper-bot"
+          git config user.email "noreply@rotaserv.local"
+          git add crypto/state.json crypto/ledger.csv
+          git diff --cached --quiet || git commit -m "crypto paper mark $(date -u +%F)"
+          git push
