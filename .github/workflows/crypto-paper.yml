@@ -1,8 +1,9 @@
 name: crypto-paper
-# Crypto Lane paper engine (Charter v1.1). Daily at 00:20 UTC after the 00:00 UTC close. Signal only, no orders.
+# Crypto Lane paper engine (Charter v1.1). Daily after the 00:00 UTC close (00:37 UTC, fallback 03:17). Signal only, no orders.
 on:
   schedule:
-    - cron: '20 0 * * *'
+    - cron: '37 0 * * *'   # off the top of the hour: GitHub delays are worst at :00/:20
+    - cron: '17 3 * * *'   # fallback; the engine skips if today is already marked
   workflow_dispatch:
     inputs:
       force:
