@@ -3,4 +3,4 @@ import { runScan } from './lib/scan-core.mjs';
 
 export default async () => { await runScan('sunday'); };
 
-export const config = { schedule: '0 4 * * 0' };
+// schedule removed 1 Nov 2026 (options off until January; Netlify_GitHub_Plan_28Oct2026). Re-add: export const config = { schedule: '...' };

@@ -75,6 +75,4 @@ export default async (req) => {
   }
 };
 
-export const config = {
-  schedule: '0 13 * * 1-5',
-};
+// schedule removed 1 Nov 2026 (options off until January; Netlify_GitHub_Plan_28Oct2026). Re-add: export const config = { schedule: '...' };

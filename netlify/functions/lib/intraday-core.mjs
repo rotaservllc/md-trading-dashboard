@@ -11,10 +11,18 @@ import { RESEARCH_TAGS } from './universe.mjs';
 const TT = 'https://api.tastyworks.com';
 const UA = { 'User-Agent': 'md-trading-dashboard/1.0' };
 
-// ── Levels (Charter §4 / Knox 21 Sep charts: FIRE <545 ×3, INVALIDATE >672 (Knox 29 Sep negation 640–671.83; was 640), TLT WARN <80.91) — edit here in writing, never ad hoc ──
+// ── Levels (Charter §4 / Knox 29 Sep charts, applied 1 Oct & 5 Oct: FIRE <545 ×3, INVALIDATE >672 (negation zone 640–671.83; was 640), TLT WARN <80.91, TLT BOUNCE ≥78.50 = credit-spread re-price) — edit here in writing, never ad hoc ──
 const LEVELS = [
   { sym: 'SMH', level: 545,   above: 'SMH back above $545 — bear FIRE level reclaimed',            below: '🔴 SMH below $545 — Knox bear-count FIRE level (3 closes = pause AI-hardware adds, execute IO trims, flip KNOX_TRIGGER)' },
-  { sym: 'SMH', level: 672,   above: '🟢 SMH above $672 — Knox negation zone (640–671.83) cleared; bear count invalidated → resume Sarwa adds at IO weights; KNOX_TRIGGER may go to calls', below: '⚠️ SMH back below $672 — gate shut again: no new semi adds (Knox 29 Sep: (b) wave, 5-wave drop → $507–430)' },
+  { sym: 'SMH', level: 672,   above: '🟢 SMH above $672 — Knox INVALIDATION (29 Sep: negation zone 640–671.83) cleared; bear count invalidated → semis adds may resume, KNOX_TRIGGER may go to calls', below: '⚠️ SMH back below $672 — bear count primary again (Knox 29 Sep: downside $507–496 / 468 / 430–419)' },
+  { sym: 'SMH', level: 513,   above: '↩️ SMH back above $513', below: '🎯 SMH below $513 — Knox first target (513 → 491 → 482 → 464/450). TRANCHE 3 (~$1,600) fires ONLY with a capitulation signature: VIX ≥ 25 or oversold breadth ≥ 15% (20 Oct filter). Otherwise wait for 491/482. Check /api/market-scan or get_market_pulse before buying.' },
+  { sym: 'SMH', level: 628,   above: '🟢 SMH above $628 — Knox 20 Oct: GREEN count (ending-diagonal wave 5) likely; path 671.83 → 722 → 748 → 792', below: '↩️ SMH back below $628 — green count not confirmed' },
+  { sym: 'SMH', level: 539,   above: '↩️ SMH back above $539 (16 Oct low)', below: '🔴 SMH below $539.07 — Knox 20 Oct: breakdown below Friday low with force = IO layers MORE hedge; blue path 513 → 491/482 → 464/450 → 440s by year-end' },
+  { sym: 'SPY', level: 777.65, above: '🟢 SPY above $777.65 — Knox 20 Oct: new highs likely into month-end (781.62 / 786 / 797), then bull trap. ACTION (20 Oct plan): HSBC EQQQ → XDEW swap (~$10.7K) into this strength · tranches stay cash. No buying the bounce', below: '↩️ SPY back below $777.65' },
+  { sym: 'COPX', level: 68.20, above: '↩️ COPX (US) back above $68.20', below: '🟢 COPX (US) below $68.20 ≈ LSE COPX ≤ $52.95 (−8% from the 23 Oct half-A fill $57.56). ACTION: HSBC T4 half B — buy ~$2,206 of COPX.L (LSE, USD line) from cash. Backstop 15 Jan 2027 if never hit.' },
+  { sym: 'SPY', level: 755,   above: '↩️ SPY back above $755', below: '🔴 SPY below $755 — Knox 20 Oct: breakdown scenario CONFIRMED (wave 2 underway); next 748.5 / 740.7 / 731' },
+  { sym: 'SPY', level: 731,   above: '🟢 SPY back above $731 — bull count intact', below: '🔴 SPY below $731 — Knox: bull count INVALIDATED (736–731 had to hold). Rotation has become liquidation; review all adds; next 722.6 / 703.8 / 685.' },
+  { sym: 'TLT', level: 78.50, above: '📈 TLT bounce ≥ $78.50 — oversold snap-back. If IV rank still >60: re-price 20 Nov / 18 Dec call credit spread 80.5/81.5 or 81/82 (bearish with Knox $75.5→73.5→70.4, 50-day $81.55). Charter §3 credit lane, Tier-1 ≤2%. Log before order.', below: '↩️ TLT back below $78.50 — bounce faded; stand down on the TLT credit spread' },
   { sym: 'TLT', level: 80.91, above: '🟢 TLT reclaimed $80.91 — bond WARN cleared',               below: '⚠️ TLT below $80.91 — Knox WARN (leading indicator; watch SMH)' },
 ];
 const VIX_BANDS = [20, 25];                 // regimeOf thresholds: MIXED ≥20, RISK-OFF ≥25
@@ -68,7 +76,7 @@ export async function runIntraday({ force = false, status = false } = {}) {
     const token = await getTTToken();
     const wl = await getWatchlist();
     const ivNames = [...new Set([...Object.keys(RESEARCH_TAGS), ...wl.map(w => w.ticker)])].filter(t => !['SPY','QQQ','SMH','TLT','IWM','DIA'].includes(t));
-    const [vix, q, acct] = await Promise.all([fetchVIX(), quotes(['SMH', 'TLT', ...ivNames]), account(token)]);
+    const [vix, q, acct] = await Promise.all([fetchVIX(), quotes(['SMH', 'TLT', 'SPY', 'COPX', ...ivNames]), account(token)]);
 
     // 1) Knox levels — crossing detection
     state.levels ||= {};

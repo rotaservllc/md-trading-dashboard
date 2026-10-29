@@ -24,10 +24,16 @@ export default async (req) => {
   const key = Netlify.env.get('MARKET_SCAN_KEY');
   if (key && req.headers.get('x-scan-key') !== key) return new Response('forbidden', { status: 403 });
   const t0 = Date.now();
-  const mode = (new URL(req.url)).searchParams.get('mode') || 'nightly';
+  const url = new URL(req.url);
+  const mode = url.searchParams.get('mode') || 'nightly';
+  const paper = mode === 'paper';                                   // 15 Oct: paper lane — same gates, hypothetical NLV, no real sizing
+  const nlvOverride = parseFloat(url.searchParams.get('nlv') || '0');
+  // paper-only gate overrides for sensitivity tests (never applied to the real lane)
+  if (paper) { const cw = parseFloat(url.searchParams.get('cw') || '0'); if (cw > 0) CFG.MIN_CREDIT_WIDTH = cw; const dl = parseFloat(url.searchParams.get('delta') || '0'); if (dl > 0) CFG.TARGET_SHORT_DELTA = dl; }
   try {
     const token = await getTTToken();
-    const [nlv, vix] = await Promise.all([getNLV(token), fetchVIX()]);
+    const [nlvReal, vix] = await Promise.all([getNLV(token), fetchVIX()]);
+    const nlv = paper && nlvOverride > 0 ? nlvOverride : nlvReal;
     const regime = regimeOf(vix);
     const veto = (Netlify.env.get('IO_FUND_VETO_LIST') || '').split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
     const trigger = (Netlify.env.get('KNOX_TRIGGER') || 'off').toLowerCase();
@@ -110,6 +116,21 @@ export default async (req) => {
       timing: { metricsMs: tMetrics, totalMs: Date.now() - t0 },
     };
     const store = getStore('trading-data');
+    if (paper) {
+      // Paper lane: record every gate-passing credit setup at the hypothetical NLV so expectancy can be measured before any capital is added (Charter §13 Stage B evidence).
+      result.paperNlv = nlv; result.realNlv = nlvReal;
+      await store.setJSON('market-scan-paper', result);
+      const log = (await store.get('paper-log', { type: 'json' })) || [];
+      const day = result.generatedAt.slice(0, 10);
+      for (const c of credit.slice(0, 10)) {
+        const id = `${day}:${c.ticker}:${c.suggestedStrike}:${c.expiry || c.nearExpiry || ''}`;
+        if (log.some(x => x.id === id)) continue;
+        log.push({ id, day, ticker: c.ticker, source: c.source, strikes: c.suggestedStrike, expiry: c.expiry || c.nearExpiry || null, dte: c.dte ?? null, credit: c.credit, maxLoss: c.maxLoss, pop: c.pop, ivr: c.ivrPct, tier2: !!c.tier2, status: 'open' });
+      }
+      await store.setJSON('paper-log', log.slice(-400));
+      await sendTelegram(`🧪 <b>Paper lane</b> (NLV $${nlv.toLocaleString()} hypothetical) · ${credit.length} credit setups cleared all gates${credit.length ? ': ' + credit.slice(0, 5).map(c => `${c.ticker} ${c.suggestedStrike} cr $${c.credit} maxL $${c.maxLoss} POP ${c.pop}%`).join(' · ') : ''} · log ${log.length} entries. Nothing is traded from this lane.`);
+      return new Response(JSON.stringify({ ok: true, paper: true, credit: credit.length, logged: log.length }), { headers: { 'Content-Type': 'application/json' } });
+    }
     await store.setJSON('market-scan', result);
     await sendTelegram(buildMsg(result));
     return new Response(JSON.stringify({ ok: true, credit: credit.length, debit: debit.length, ms: result.timing.totalMs }), { headers: { 'Content-Type': 'application/json' } });

@@ -5,7 +5,6 @@ import { getWatchlist, saveWatchlist } from './lib/watchlist.mjs';
 import { getTTToken } from './lib/tt-auth.mjs';
 import { CFG, getNLV, fetchMetrics, fetchVIX, regimeOf, fetchChain, buildPCS, buildDebit } from './lib/scan-core.mjs';
 import { sourceOf } from './lib/universe.mjs';
-import { formatMsg } from './lib/crypto-core.mjs';
 
 const ALLOWED_CHAT_ID = Netlify.env.get('TELEGRAM_CHAT_ID');
 const BOT_TOKEN = Netlify.env.get('TELEGRAM_BOT_TOKEN');
@@ -301,10 +300,18 @@ async function handleHsbc(chatId) {
 }
 
 async function handleCrypto(chatId) {
-  const st = await getStore({ name: 'crypto-paper', consistency: 'strong' }).get('state', { type: 'json' });
-  if (!st) { await reply(chatId, 'No crypto paper state yet.'); return; }
-  const f = Object.entries(st.analysis.BTC.fired).map(([k, v]) => `${v ? '✅' : '▫️'} ${k}`).join(' · ');
-  await reply(chatId, formatMsg(st, false) + `\nBTC rules: ${f}\nE lane drawdown vs 1y high: BTC ${(st.analysis.BTC.dd * 100).toFixed(0)}% · ETH ${(st.analysis.ETH.dd * 100).toFixed(0)}%`);
+  // Crypto Lane paper state is committed by the GitHub Actions workflow `crypto-paper` (repo rotaservllc/md-trading-dashboard)
+  const r = await fetch('https://raw.githubusercontent.com/rotaservllc/md-trading-dashboard/main/crypto/state.json?t=' + Date.now());
+  if (!r.ok) { await reply(chatId, 'Crypto paper state not readable (' + r.status + ').'); return; }
+  const st = await r.json(); const L = st.lanes, b = st.analysis.BTC, e = st.analysis.ETH;
+  const pct = x => (x * 100).toFixed(0) + '%';
+  const eq = k => `${k} $${L[k].eq.toLocaleString('en-US', { maximumFractionDigits: 0 })} (${((L[k].eq / 12000 - 1) * 100).toFixed(1)}%)`;
+  const f = Object.entries(b.fired).map(([k, v]) => `${v ? '✅' : '▫️'} ${k}`).join(' · ');
+  await reply(chatId, `🪙 <b>Crypto lane paper · ${st.lastDate}</b> (day ${st.days}, marked ${(st.lastRun || '').slice(0, 16)}Z)\n` +
+    `BTC $${b.close.toLocaleString('en-US', { maximumFractionDigits: 0 })} score ${b.score.toFixed(2)} vol ${pct(b.rv)} · ETH $${e.close.toLocaleString('en-US', { maximumFractionDigits: 0 })} score ${e.score.toFixed(2)} vol ${pct(e.rv)}\n` +
+    `Lane D ${pct(L.D.w.BTC + L.D.w.ETH)} (BTC ${pct(L.D.w.BTC)} ETH ${pct(L.D.w.ETH)}) · E ${pct(L.E.w.BTC + L.E.w.ETH)} · S ${pct(-(L.S.w.BTC + L.S.w.ETH))} short · R ${pct(Object.values(L.R.w).reduce((a, x) => a + x, 0))}\n` +
+    `Carry: BTC ${L.C.funding?.BTC == null ? 'n/a' : pct(L.C.funding.BTC)} ${L.C.in.BTC ? 'IN' : 'out'} · ETH ${L.C.funding?.ETH == null ? 'n/a' : pct(L.C.funding.ETH)} ${L.C.in.ETH ? 'IN' : 'out'}\n` +
+    `Equity: ${['D', 'E', 'C', 'S', 'R'].map(eq).join(' · ')}\nBTC rules: ${f}`);
 }
 
 async function handleHelp(chatId) {
