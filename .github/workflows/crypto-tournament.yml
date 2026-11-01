@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
-concurrency: crypto-state
+concurrency: crypto-paper
 jobs:
   retest:
     runs-on: ubuntu-latest
