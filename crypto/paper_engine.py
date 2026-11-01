@@ -17,6 +17,9 @@ LEDGER = os.path.join(HERE, "ledger.csv")
 PARAMS = dict(laneUSD=12000, volTarget=0.35, volWindow=30, band=0.05, feeSide=0.002, altFeeSide=0.0035, perpFeeSide=0.0025,
               carryIn=0.08, carryOut=0.03, drawdownDerisk=0.15,
               universe=["BTC", "ETH", "BNB", "XRP", "SOL", "TRX", "ZEC", "DOGE", "LINK", "XMR"])
+# November 2026 paper tournament (Learning_Log 1 Nov grid): extra long/flat variants run beside D. name -> (rule set, vol target or None)
+FAST = ["Donchian 20/10", "Donchian 30/15", "TSMOM 30"]
+VARIANTS = {"F35": ("fast", 0.35), "F50": ("fast", 0.50), "F70": ("fast", 0.70), "D50": ("all", 0.50), "D00": ("all", None)}
 UA = {"User-Agent": "Mozilla/5.0"}
 
 def get(url, timeout=40):
@@ -91,8 +94,13 @@ def analyse(closes):
     rv = math.sqrt(sum((r - mu) ** 2 for r in rets) / (len(rets) - 1)) * math.sqrt(365)
     scale = min(1.0, PARAMS["volTarget"] / rv)
     hi1y = max(closes[-365:]); dd = closes[i] / hi1y - 1
-    return dict(close=closes[i], score=score, fired=fired, rv=rv, scale=scale, hi1y=hi1y, dd=dd,
-                wD=score * scale, wE=score * scale * (0.5 if dd < -PARAMS["drawdownDerisk"] else 1.0), wS=(-scale if score == 0 else 0.0))
+    fast = sum(fired[k] for k in FAST) / len(FAST)
+    wV = {}
+    for name, (rs, vt) in VARIANTS.items():
+        sc = (fast if rs == "fast" else score) * (1.0 if vt is None else min(1.0, vt / rv))
+        wV[name] = sc
+    return dict(close=closes[i], score=score, fast=fast, fired=fired, rv=rv, scale=scale, hi1y=hi1y, dd=dd,
+                wD=score * scale, wE=score * scale * (0.5 if dd < -PARAMS["drawdownDerisk"] else 1.0), wS=(-scale if score == 0 else 0.0), wV=wV)
 
 # ---------- ledger ----------
 r4 = lambda x: round(x * 1e4) / 1e4
@@ -112,7 +120,8 @@ def lane_step(lane, new_w, px, prev_px, fee):
                 trades=lane.get("trades", 0) + (1 if turn > 0 else 0), turnover=r4(lane.get("turnover", 0) + turn))
 
 def trim(a):
-    return dict(close=a["close"], score=a["score"], fired=a["fired"], rv=r4(a["rv"]), scale=r4(a["scale"]), dd=r4(a["dd"]), wD=r4(a["wD"]), wE=r4(a["wE"]), wS=r4(a["wS"]))
+    return dict(close=a["close"], score=a["score"], fast=a["fast"], fired=a["fired"], rv=r4(a["rv"]), scale=r4(a["scale"]), dd=r4(a["dd"]), wD=r4(a["wD"]), wE=r4(a["wE"]), wS=r4(a["wS"]),
+                wV={k: r4(v) for k, v in a["wV"].items()})
 
 def pct(x): return f"{x * 100:.0f}%"
 def format_msg(s, changed):
@@ -127,6 +136,8 @@ def format_msg(s, changed):
             f"Lane D exposure {pct(L['D']['w']['BTC'] + L['D']['w']['ETH'])} · E {pct(L['E']['w']['BTC'] + L['E']['w']['ETH'])} · S {pct(-(L['S']['w']['BTC'] + L['S']['w']['ETH']))} short · R {pct(rsum)}\n"
             f"Carry: BTC {fb} {'IN' if L['C']['in'].get('BTC') else 'out'} · ETH {fe} {'IN' if L['C']['in'].get('ETH') else 'out'} (gate {pct(PARAMS['carryIn'])}/{pct(PARAMS['carryOut'])})\n"
             f"Paper equity day {s['days']}: {' · '.join(eq(k) for k in ['D', 'E', 'C', 'S', 'R'])}\n"
+            f"Variants (fast3 F35/F50/F70, 7-rule D50/D00): {' · '.join(eq(k) for k in VARIANTS if k in L)}\n"
+            f"Leader: {max((k for k in L if k != 'C'), key=lambda k: L[k]['eq'])}\n"
             f"Data {s['src']['BTC']}/{s['src']['ETH']}. Signal only, no orders. Runner: GitHub Actions.")
 
 def send_telegram(text):
@@ -153,6 +164,8 @@ def run(force=False, quiet=False, dry=False):
     lanes["D"] = lane_step(lanes.get("D", {}), dict(BTC=A["BTC"]["wD"] / 2, ETH=A["ETH"]["wD"] / 2), px, prev_px, PARAMS["feeSide"])
     lanes["E"] = lane_step(lanes.get("E", {}), dict(BTC=A["BTC"]["wE"] / 2, ETH=A["ETH"]["wE"] / 2), px, prev_px, PARAMS["feeSide"])
     lanes["S"] = lane_step(lanes.get("S", {}), dict(BTC=A["BTC"]["wS"] / 2, ETH=A["ETH"]["wS"] / 2), px, prev_px, PARAMS["perpFeeSide"])
+    for v in VARIANTS:
+        lanes[v] = lane_step(lanes.get(v, {}), dict(BTC=A["BTC"]["wV"][v] / 2, ETH=A["ETH"]["wV"][v] / 2), px, prev_px, PARAMS["feeSide"])
     C = lanes.get("C") or {"in": {}, "eq": PARAMS["laneUSD"], "peak": PARAMS["laneUSD"], "trades": 0}
     cret, cturn, in_now = 0.0, 0.0, {}
     for k in ["BTC", "ETH"]:
@@ -190,8 +203,8 @@ def run(force=False, quiet=False, dry=False):
     if not dry:
         json.dump(state, open(STATE, "w"), indent=1)
         with open(LEDGER, "w", newline="") as f:
-            w = csv.writer(f); w.writerow(["date", "btc", "eth", "composite", "eqD", "eqE", "eqC", "eqS", "eqR", "wD_btc", "wD_eth", "carry_btc", "carry_eth"])
-            for r in ledger: w.writerow([r["date"], r["px"]["BTC"], r["px"]["ETH"], r["composite"], r["eq"]["D"], r["eq"]["E"], r["eq"]["C"], r["eq"]["S"], r["eq"]["R"], r["wD"]["BTC"], r["wD"]["ETH"], r["carryIn"]["BTC"], r["carryIn"]["ETH"]])
+            w = csv.writer(f); w.writerow(["date", "btc", "eth", "composite", "eqD", "eqE", "eqC", "eqS", "eqR", "wD_btc", "wD_eth", "carry_btc", "carry_eth"] + [f"eq{v}" for v in VARIANTS])
+            for r in ledger: w.writerow([r["date"], r["px"]["BTC"], r["px"]["ETH"], r["composite"], r["eq"]["D"], r["eq"]["E"], r["eq"]["C"], r["eq"]["S"], r["eq"]["R"], r["wD"]["BTC"], r["wD"]["ETH"], r["carryIn"]["BTC"], r["carryIn"]["ETH"]] + [r["eq"].get(v, "") for v in VARIANTS])
     msg = format_msg(state, changed)
     print(msg)
     if not quiet and (changed or monday or force): send_telegram(msg)
