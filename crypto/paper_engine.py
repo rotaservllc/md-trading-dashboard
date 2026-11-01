@@ -19,7 +19,8 @@ PARAMS = dict(laneUSD=12000, volTarget=0.35, volWindow=30, band=0.05, feeSide=0.
               universe=["BTC", "ETH", "BNB", "XRP", "SOL", "TRX", "ZEC", "DOGE", "LINK", "XMR"])
 # November 2026 paper tournament (Learning_Log 1 Nov grid): extra long/flat variants run beside D. name -> (rule set, vol target or None)
 FAST = ["Donchian 20/10", "Donchian 30/15", "TSMOM 30"]
-VARIANTS = {"F35": ("fast", 0.35), "F50": ("fast", 0.50), "F70": ("fast", 0.70), "D50": ("all", 0.50), "D00": ("all", None)}
+BARBELL = ["Donchian 20/10", "TSMOM 30", "SMA200", "Donchian 100/50"]   # 2 fast + 2 slow (1 Nov barbell test)
+VARIANTS = {"F35": ("fast", 0.35), "F50": ("fast", 0.50), "F70": ("fast", 0.70), "D50": ("all", 0.50), "D00": ("all", None), "B50": ("barbell", 0.50), "B70": ("barbell", 0.70)}
 UA = {"User-Agent": "Mozilla/5.0"}
 
 def get(url, timeout=40):
@@ -94,10 +95,10 @@ def analyse(closes):
     rv = math.sqrt(sum((r - mu) ** 2 for r in rets) / (len(rets) - 1)) * math.sqrt(365)
     scale = min(1.0, PARAMS["volTarget"] / rv)
     hi1y = max(closes[-365:]); dd = closes[i] / hi1y - 1
-    fast = sum(fired[k] for k in FAST) / len(FAST)
+    fast = sum(fired[k] for k in FAST) / len(FAST); bar = sum(fired[k] for k in BARBELL) / len(BARBELL)
     wV = {}
     for name, (rs, vt) in VARIANTS.items():
-        sc = (fast if rs == "fast" else score) * (1.0 if vt is None else min(1.0, vt / rv))
+        sc = {"fast": fast, "barbell": bar}.get(rs, score) * (1.0 if vt is None else min(1.0, vt / rv))
         wV[name] = sc
     return dict(close=closes[i], score=score, fast=fast, fired=fired, rv=rv, scale=scale, hi1y=hi1y, dd=dd,
                 wD=score * scale, wE=score * scale * (0.5 if dd < -PARAMS["drawdownDerisk"] else 1.0), wS=(-scale if score == 0 else 0.0), wV=wV)
@@ -136,7 +137,7 @@ def format_msg(s, changed):
             f"Lane D exposure {pct(L['D']['w']['BTC'] + L['D']['w']['ETH'])} · E {pct(L['E']['w']['BTC'] + L['E']['w']['ETH'])} · S {pct(-(L['S']['w']['BTC'] + L['S']['w']['ETH']))} short · R {pct(rsum)}\n"
             f"Carry: BTC {fb} {'IN' if L['C']['in'].get('BTC') else 'out'} · ETH {fe} {'IN' if L['C']['in'].get('ETH') else 'out'} (gate {pct(PARAMS['carryIn'])}/{pct(PARAMS['carryOut'])})\n"
             f"Paper equity day {s['days']}: {' · '.join(eq(k) for k in ['D', 'E', 'C', 'S', 'R'])}\n"
-            f"Variants (fast3 F35/F50/F70, 7-rule D50/D00): {' · '.join(eq(k) for k in VARIANTS if k in L)}\n"
+            f"Variants (fast3 F35/F50/F70, 7-rule D50/D00, barbell B50/B70): {' · '.join(eq(k) for k in VARIANTS if k in L)}\n"
             f"Leader: {max((k for k in L if k != 'C'), key=lambda k: L[k]['eq'])}\n"
             f"Data {s['src']['BTC']}/{s['src']['ETH']}. Signal only, no orders. Runner: GitHub Actions.")
 

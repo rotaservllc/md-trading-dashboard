@@ -30,6 +30,7 @@ def load(sym, refetch=True):
 CONFIGS = {  # name: (rule names, vol target or None)
     "D (7 rules VT35)": (list(pe.RULES), 0.35), "D50 (7 rules VT50)": (list(pe.RULES), 0.50), "D70": (list(pe.RULES), 0.70), "D00 (no cap)": (list(pe.RULES), None),
     "F35 (fast3 VT35)": (pe.FAST, 0.35), "F50 (fast3 VT50)": (pe.FAST, 0.50), "F70": (pe.FAST, 0.70), "F00": (pe.FAST, None),
+    "B35 (barbell VT35)": (pe.BARBELL, 0.35), "B50 (barbell VT50)": (pe.BARBELL, 0.50), "B70 (barbell VT70)": (pe.BARBELL, 0.70),
     "slow4 VT35": ([k for k in pe.RULES if k not in pe.FAST], 0.35), "slow4 VT50": ([k for k in pe.RULES if k not in pe.FAST], 0.50),
 }
 
