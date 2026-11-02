@@ -1,0 +1,25 @@
+name: crypto-6h
+# 6-hour-bar paper lanes F50h/B50h plus the intraday alert net (alerts only, never trades). Runs after each 6h close.
+on:
+  schedule:
+    - cron: '22 0,6,12,18 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency: crypto-paper
+jobs:
+  mark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 crypto/intraday_engine.py
+      - run: |
+          git config user.name "crypto-paper-bot" && git config user.email "noreply@rotaserv.local"
+          git add crypto/state_6h.json crypto/ledger_6h.csv
+          git diff --cached --quiet || (git commit -m "crypto 6h mark $(date -u +%FT%H)" && git pull --rebase && git push)
