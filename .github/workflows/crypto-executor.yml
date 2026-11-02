@@ -1,0 +1,39 @@
+name: crypto-executor
+# Crypto lane executor, OKX DEMO (Executor_Spec_v1). Marks the paper lanes first (skip if done), then trades lane EXEC_LANE on the demo account.
+# Window 00:10-01:00 UTC. Primary trigger is the Netlify pinger (workflow_dispatch at 00:12 UTC); cron is the fallback. Idempotent per day.
+on:
+  schedule:
+    - cron: '14 0 * * *'
+    - cron: '48 0 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency: crypto-paper
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Mark paper lanes (skips if already marked)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 crypto/paper_engine.py
+      - name: Execute on OKX demo
+        env:
+          OKX_DEMO_KEY: ${{ secrets.OKX_DEMO_KEY }}
+          OKX_DEMO_SECRET: ${{ secrets.OKX_DEMO_SECRET }}
+          OKX_DEMO_PASSPHRASE: ${{ secrets.OKX_DEMO_PASSPHRASE }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          EXEC_LANE: D
+        run: python3 crypto/executor.py
+      - name: Commit state
+        if: always()
+        run: |
+          git config user.name "crypto-paper-bot" && git config user.email "noreply@rotaserv.local"
+          git add crypto/state.json crypto/ledger.csv crypto/exec_state.json crypto/fills.csv 2>/dev/null || true
+          git diff --cached --quiet || (git commit -m "crypto exec $(date -u +%F)" && git pull --rebase && git push)
