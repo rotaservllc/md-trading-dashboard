@@ -13,7 +13,7 @@ STATE = os.path.join(HERE, "state.json"); EXEC = os.path.join(HERE, "exec_state.
 BASE = "https://openapi.okx.com" if not os.environ.get("EXEC_LIVE") else "https://www.okx.com"
 LANE = os.environ.get("EXEC_LANE", "D"); COINS = ["BTC", "ETH"]; CASH_ASSET = "BUIDL"
 BAND = 0.05; WINDOW_MIN = 15; REPRICE_S = 60; MAX_DEV = 0.01; BUIDL_DEV = 0.003
-KEY, SEC, PASS = os.environ.get("OKX_DEMO_KEY", ""), os.environ.get("OKX_DEMO_SECRET", ""), os.environ.get("OKX_DEMO_PASSPHRASE", "")
+KEY, SEC, PASS = (os.environ.get(k, "").strip() for k in ("OKX_DEMO_KEY", "OKX_DEMO_SECRET", "OKX_DEMO_PASSPHRASE"))
 log_lines = []
 def log(*a):
     s = " ".join(str(x) for x in a); print(s, flush=True); log_lines.append(s)
