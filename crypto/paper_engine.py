@@ -20,7 +20,8 @@ PARAMS = dict(laneUSD=12000, volTarget=0.35, volWindow=30, band=0.05, feeSide=0.
 # November 2026 paper tournament (Learning_Log 1 Nov grid): extra long/flat variants run beside D. name -> (rule set, vol target or None)
 FAST = ["Donchian 20/10", "Donchian 30/15", "TSMOM 30"]
 BARBELL = ["Donchian 20/10", "TSMOM 30", "SMA200", "Donchian 100/50"]   # 2 fast + 2 slow (1 Nov barbell test)
-VARIANTS = {"F35": ("fast", 0.35), "F50": ("fast", 0.50), "F70": ("fast", 0.70), "D50": ("all", 0.50), "D00": ("all", None), "B50": ("barbell", 0.50), "B70": ("barbell", 0.70)}
+VARIANTS = {"F35": ("fast", 0.35), "F50": ("fast", 0.50), "F70": ("fast", 0.70), "D50": ("all", 0.50), "D00": ("all", None), "B50": ("barbell", 0.50), "B70": ("barbell", 0.70),
+            "B50L": ("barbell", 0.50, 1.5), "F50L": ("fast", 0.50, 1.5)}   # L = levered via perps up to 1.5x when vol is low (6 Nov test)
 UA = {"User-Agent": "Mozilla/5.0"}
 
 def get(url, timeout=40):
@@ -97,8 +98,9 @@ def analyse(closes):
     hi1y = max(closes[-365:]); dd = closes[i] / hi1y - 1
     fast = sum(fired[k] for k in FAST) / len(FAST); bar = sum(fired[k] for k in BARBELL) / len(BARBELL)
     wV = {}
-    for name, (rs, vt) in VARIANTS.items():
-        sc = {"fast": fast, "barbell": bar}.get(rs, score) * (1.0 if vt is None else min(1.0, vt / rv))
+    for name, spec in VARIANTS.items():
+        rs, vt = spec[0], spec[1]; cap = spec[2] if len(spec) > 2 else 1.0
+        sc = {"fast": fast, "barbell": bar}.get(rs, score) * (1.0 if vt is None else min(cap, vt / rv))
         wV[name] = sc
     return dict(close=closes[i], score=score, fast=fast, fired=fired, rv=rv, scale=scale, hi1y=hi1y, dd=dd,
                 wD=score * scale, wE=score * scale * (0.5 if dd < -PARAMS["drawdownDerisk"] else 1.0), wS=(-scale if score == 0 else 0.0), wV=wV)
@@ -137,7 +139,7 @@ def format_msg(s, changed):
             f"Lane D exposure {pct(L['D']['w']['BTC'] + L['D']['w']['ETH'])} · E {pct(L['E']['w']['BTC'] + L['E']['w']['ETH'])} · S {pct(-(L['S']['w']['BTC'] + L['S']['w']['ETH']))} short · R {pct(rsum)}\n"
             f"Carry: BTC {fb} {'IN' if L['C']['in'].get('BTC') else 'out'} · ETH {fe} {'IN' if L['C']['in'].get('ETH') else 'out'} (gate {pct(PARAMS['carryIn'])}/{pct(PARAMS['carryOut'])})\n"
             f"Paper equity day {s['days']}: {' · '.join(eq(k) for k in ['D', 'E', 'C', 'S', 'R'])}\n"
-            f"Variants (fast3 F35/F50/F70, 7-rule D50/D00, barbell B50/B70): {' · '.join(eq(k) for k in VARIANTS if k in L)}\n"
+            f"Variants (fast3 F35/F50/F70, 7-rule D50/D00, barbell B50/B70, levered 1.5x B50L/F50L): {' · '.join(eq(k) for k in VARIANTS if k in L)}\n"
             f"Leader: {max((k for k in L if k != 'C'), key=lambda k: L[k]['eq'])}\n"
             f"Data {s['src']['BTC']}/{s['src']['ETH']}. Signal only, no orders. Runner: GitHub Actions.")
 
@@ -167,6 +169,9 @@ def run(force=False, quiet=False, dry=False):
     lanes["S"] = lane_step(lanes.get("S", {}), dict(BTC=A["BTC"]["wS"] / 2, ETH=A["ETH"]["wS"] / 2), px, prev_px, PARAMS["perpFeeSide"])
     for v in VARIANTS:
         lanes[v] = lane_step(lanes.get(v, {}), dict(BTC=A["BTC"]["wV"][v] / 2, ETH=A["ETH"]["wV"][v] / 2), px, prev_px, PARAMS["feeSide"])
+        if len(VARIANTS[v]) > 2:   # levered lane: charge the day's funding on exposure above 1x of the lane (half per coin above 0.5)
+            fcost = sum(max(0.0, lanes[v]["w"][k] - 0.5) * ((funding.get(k) or {}).get("day") or 0.0) for k in ["BTC", "ETH"])
+            lanes[v]["eq"] = round(lanes[v]["eq"] * (1 - fcost) * 100) / 100; lanes[v]["fundingPaid"] = r4(lanes[v].get("fundingPaid", 0) + fcost)
     C = lanes.get("C") or {"in": {}, "eq": PARAMS["laneUSD"], "peak": PARAMS["laneUSD"], "trades": 0}
     cret, cturn, in_now = 0.0, 0.0, {}
     for k in ["BTC", "ETH"]:

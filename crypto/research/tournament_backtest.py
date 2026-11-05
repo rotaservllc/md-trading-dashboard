@@ -31,10 +31,11 @@ CONFIGS = {  # name: (rule names, vol target or None)
     "D (7 rules VT35)": (list(pe.RULES), 0.35), "D50 (7 rules VT50)": (list(pe.RULES), 0.50), "D70": (list(pe.RULES), 0.70), "D00 (no cap)": (list(pe.RULES), None),
     "F35 (fast3 VT35)": (pe.FAST, 0.35), "F50 (fast3 VT50)": (pe.FAST, 0.50), "F70": (pe.FAST, 0.70), "F00": (pe.FAST, None),
     "B35 (barbell VT35)": (pe.BARBELL, 0.35), "B50 (barbell VT50)": (pe.BARBELL, 0.50), "B70 (barbell VT70)": (pe.BARBELL, 0.70),
+    "B50L (barbell VT50, 1.5x cap, no funding cost)": (pe.BARBELL, 0.50, 1.5), "F50L (fast3 VT50, 1.5x cap, no funding cost)": (pe.FAST, 0.50, 1.5),
     "slow4 VT35": ([k for k in pe.RULES if k not in pe.FAST], 0.35), "slow4 VT50": ([k for k in pe.RULES if k not in pe.FAST], 0.50),
 }
 
-def series(closes, rules, vt):
+def series(closes, rules, vt, cap=1.0):
     fired = [pe.RULES[k](closes) for k in rules]
     n = len(closes); pos = [0.0] * n; out = [0.0] * n
     for i in range(1, n):
@@ -43,7 +44,7 @@ def series(closes, rules, vt):
             rets = [closes[k] / closes[k - 1] - 1 for k in range(i - pe.PARAMS["volWindow"] + 1, i + 1)]
             mu = sum(rets) / len(rets); rv = math.sqrt(sum((r - mu) ** 2 for r in rets) / (len(rets) - 1)) * math.sqrt(365)
         else: rv = None
-        sc = 1.0 if (vt is None or not rv) else min(1.0, vt / rv)
+        sc = 1.0 if (vt is None or not rv) else min(cap, vt / rv)
         pos[i] = score * sc if rv else 0.0
     for i in range(LAG + 1, n):
         w, wp = pos[i - LAG], pos[i - LAG - 1]
@@ -67,8 +68,9 @@ def main():
     lines = [f"# Crypto lane tournament re-test, {dates[-1]} (data Yahoo, cash {CASH*100:.1f}%, lag {LAG}d, fee {FEE*100:.1f}%/side)", "",
              "| config | 2018-now CAGR / maxDD / Sharpe | 2018-22 | 2023-now CAGR / maxDD / Sharpe | last 90d | last 30d |", "|---|---|---|---|---|---|"]
     ranked = []
-    for name, (rules, vt) in CONFIGS.items():
-        s = [0.5 * (a + b) for a, b in zip(series(cb, rules, vt), series(ce, rules, vt))]
+    for name, spec in CONFIGS.items():
+        rules, vt = spec[0], spec[1]; cap = spec[2] if len(spec) > 2 else 1.0
+        s = [0.5 * (a + b) for a, b in zip(series(cb, rules, vt, cap), series(ce, rules, vt, cap))]
         idx = {d: i for i, d in enumerate(dates)}
         i18 = next(i for i, d in enumerate(dates) if d >= "2018-01-01"); i23 = next(i for i, d in enumerate(dates) if d >= "2023-01-01")
         full, ins, oos = stats(s[i18:]), stats(s[i18:i23]), stats(s[i23:])
