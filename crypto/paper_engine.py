@@ -88,7 +88,8 @@ RULES = {
     "SMA100 rising": r_sma100_rising, "Donchian 100/50": lambda c: donchian(c, 100, 50), "Donchian 50/25": lambda c: donchian(c, 50, 25),
     "SMA200": r_sma200, "Donchian 20/10": lambda c: donchian(c, 20, 10), "Donchian 30/15": lambda c: donchian(c, 30, 15), "TSMOM 30": r_tsmom30,
 }
-EXTRA_RULES = {"Donchian 55/20": lambda c: donchian(c, 55, 20)}   # 8 Nov review candidates; not part of the 7-rule score
+EXTRA_RULES = {"Donchian 55/20": lambda c: donchian(c, 55, 20)}
+RELSTR = {"B50R": "B50", "F50R": "F50"}   # 8 Nov: relative-strength tilt, 70/30 toward the coin with the higher trailing 90d return   # 8 Nov review candidates; not part of the 7-rule score
 def analyse(closes):
     i = len(closes) - 1
     fired = {k: f(closes)[i] for k, f in RULES.items()}
@@ -148,6 +149,7 @@ def format_msg(s, changed):
             f"Carry: BTC {fb} {'IN' if L['C']['in'].get('BTC') else 'out'} · ETH {fe} {'IN' if L['C']['in'].get('ETH') else 'out'} (gate {pct(PARAMS['carryIn'])}/{pct(PARAMS['carryOut'])})\n"
             f"Paper equity day {s['days']}: {' · '.join(eq(k) for k in ['D', 'E', 'C', 'S', 'R'])}\n"
             f"Variants (fast3 F35/F50/F70, 7-rule D50/D00, barbell B50/B70, levered 1.5x B50L/F50L, 8 Nov candidates B35/X16/X3/B50V60): {' · '.join(eq(k) for k in VARIANTS if k in L)}\n"
+            f"Relative-strength tilt (90d, 70/30, BTC share {L.get('B50R', {}).get('tilt', 0.5):.0%}): {' · '.join(eq(k) for k in RELSTR if k in L)}\n"
             f"Leader: {max((k for k in L if k != 'C'), key=lambda k: L[k]['eq'])}\n"
             f"Data {s['src']['BTC']}/{s['src']['ETH']}. Signal only, no orders. Runner: GitHub Actions.")
 
@@ -175,6 +177,10 @@ def run(force=False, quiet=False, dry=False):
     lanes["D"] = lane_step(lanes.get("D", {}), dict(BTC=A["BTC"]["wD"] / 2, ETH=A["ETH"]["wD"] / 2), px, prev_px, PARAMS["feeSide"])
     lanes["E"] = lane_step(lanes.get("E", {}), dict(BTC=A["BTC"]["wE"] / 2, ETH=A["ETH"]["wE"] / 2), px, prev_px, PARAMS["feeSide"])
     lanes["S"] = lane_step(lanes.get("S", {}), dict(BTC=A["BTC"]["wS"] / 2, ETH=A["ETH"]["wS"] / 2), px, prev_px, PARAMS["perpFeeSide"])
+    tilt = 0.7 if (btc["closes"][-1] / btc["closes"][-91] - 1) > (eth["closes"][-1] / eth["closes"][-91] - 1) else 0.3
+    for v, basev in RELSTR.items():
+        lanes[v] = lane_step(lanes.get(v, {}), dict(BTC=A["BTC"]["wV"][basev] * tilt, ETH=A["ETH"]["wV"][basev] * (1 - tilt)), px, prev_px, PARAMS["feeSide"])
+        lanes[v]["tilt"] = tilt
     for v in VARIANTS:
         lanes[v] = lane_step(lanes.get(v, {}), dict(BTC=A["BTC"]["wV"][v] / 2, ETH=A["ETH"]["wV"][v] / 2), px, prev_px, PARAMS["feeSide"])
         if len(VARIANTS[v]) > 2:   # levered lane: charge the day's funding on exposure above 1x of the lane (half per coin above 0.5)
