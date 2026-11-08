@@ -21,7 +21,8 @@ PARAMS = dict(laneUSD=12000, volTarget=0.35, volWindow=30, band=0.05, feeSide=0.
 FAST = ["Donchian 20/10", "Donchian 30/15", "TSMOM 30"]
 BARBELL = ["Donchian 20/10", "TSMOM 30", "SMA200", "Donchian 100/50"]   # 2 fast + 2 slow (1 Nov barbell test)
 VARIANTS = {"F35": ("fast", 0.35), "F50": ("fast", 0.50), "F70": ("fast", 0.70), "D50": ("all", 0.50), "D00": ("all", None), "B50": ("barbell", 0.50), "B70": ("barbell", 0.70),
-            "B50L": ("barbell", 0.50, 1.5), "F50L": ("fast", 0.50, 1.5)}   # L = levered via perps up to 1.5x when vol is low (6 Nov test)
+            "B50L": ("barbell", 0.50, 1.5), "F50L": ("fast", 0.50, 1.5),   # L = levered via perps up to 1.5x when vol is low (6 Nov test)
+            "B35": ("barbell", 0.35), "X16": ("x16", 0.35), "X3": ("x3", 0.35), "B50V60": ("barbell", 0.50, 1.0, 60)}   # 8 Nov review: X16 = fast3 + Donchian 55/20; X3 = Donchian 55/20 AND SMA200; V60 = 60d vol window
 UA = {"User-Agent": "Mozilla/5.0"}
 
 def get(url, timeout=40):
@@ -87,22 +88,29 @@ RULES = {
     "SMA100 rising": r_sma100_rising, "Donchian 100/50": lambda c: donchian(c, 100, 50), "Donchian 50/25": lambda c: donchian(c, 50, 25),
     "SMA200": r_sma200, "Donchian 20/10": lambda c: donchian(c, 20, 10), "Donchian 30/15": lambda c: donchian(c, 30, 15), "TSMOM 30": r_tsmom30,
 }
+EXTRA_RULES = {"Donchian 55/20": lambda c: donchian(c, 55, 20)}   # 8 Nov review candidates; not part of the 7-rule score
 def analyse(closes):
     i = len(closes) - 1
     fired = {k: f(closes)[i] for k, f in RULES.items()}
     score = sum(fired.values()) / len(fired)
+    xfired = {k: f(closes)[i] for k, f in EXTRA_RULES.items()}
     rets = [closes[k] / closes[k - 1] - 1 for k in range(i - PARAMS["volWindow"] + 1, i + 1)]
     mu = sum(rets) / len(rets)
     rv = math.sqrt(sum((r - mu) ** 2 for r in rets) / (len(rets) - 1)) * math.sqrt(365)
     scale = min(1.0, PARAMS["volTarget"] / rv)
     hi1y = max(closes[-365:]); dd = closes[i] / hi1y - 1
     fast = sum(fired[k] for k in FAST) / len(FAST); bar = sum(fired[k] for k in BARBELL) / len(BARBELL)
+    x16 = (sum(fired[k] for k in FAST) + xfired["Donchian 55/20"]) / 4
+    x3 = 1.0 if (xfired["Donchian 55/20"] and fired["SMA200"]) else 0.0
+    rets60 = [closes[k] / closes[k - 1] - 1 for k in range(i - 59, i + 1)]; mu60 = sum(rets60) / 60
+    rv60 = math.sqrt(sum((r - mu60) ** 2 for r in rets60) / 59) * math.sqrt(365)
     wV = {}
     for name, spec in VARIANTS.items():
-        rs, vt = spec[0], spec[1]; cap = spec[2] if len(spec) > 2 else 1.0
-        sc = {"fast": fast, "barbell": bar}.get(rs, score) * (1.0 if vt is None else min(cap, vt / rv))
+        rs, vt = spec[0], spec[1]; cap = spec[2] if len(spec) > 2 else 1.0; volwin = spec[3] if len(spec) > 3 else 30
+        rvx = rv60 if volwin == 60 else rv
+        sc = {"fast": fast, "barbell": bar, "x16": x16, "x3": x3}.get(rs, score) * (1.0 if vt is None else min(cap, vt / rvx))
         wV[name] = sc
-    return dict(close=closes[i], score=score, fast=fast, fired=fired, rv=rv, scale=scale, hi1y=hi1y, dd=dd,
+    return dict(close=closes[i], score=score, fast=fast, fired=fired, xfired=xfired, rv=rv, rv60=rv60, scale=scale, hi1y=hi1y, dd=dd,
                 wD=score * scale, wE=score * scale * (0.5 if dd < -PARAMS["drawdownDerisk"] else 1.0), wS=(-scale if score == 0 else 0.0), wV=wV)
 
 # ---------- ledger ----------
@@ -139,7 +147,7 @@ def format_msg(s, changed):
             f"Lane D exposure {pct(L['D']['w']['BTC'] + L['D']['w']['ETH'])} · E {pct(L['E']['w']['BTC'] + L['E']['w']['ETH'])} · S {pct(-(L['S']['w']['BTC'] + L['S']['w']['ETH']))} short · R {pct(rsum)}\n"
             f"Carry: BTC {fb} {'IN' if L['C']['in'].get('BTC') else 'out'} · ETH {fe} {'IN' if L['C']['in'].get('ETH') else 'out'} (gate {pct(PARAMS['carryIn'])}/{pct(PARAMS['carryOut'])})\n"
             f"Paper equity day {s['days']}: {' · '.join(eq(k) for k in ['D', 'E', 'C', 'S', 'R'])}\n"
-            f"Variants (fast3 F35/F50/F70, 7-rule D50/D00, barbell B50/B70, levered 1.5x B50L/F50L): {' · '.join(eq(k) for k in VARIANTS if k in L)}\n"
+            f"Variants (fast3 F35/F50/F70, 7-rule D50/D00, barbell B50/B70, levered 1.5x B50L/F50L, 8 Nov candidates B35/X16/X3/B50V60): {' · '.join(eq(k) for k in VARIANTS if k in L)}\n"
             f"Leader: {max((k for k in L if k != 'C'), key=lambda k: L[k]['eq'])}\n"
             f"Data {s['src']['BTC']}/{s['src']['ETH']}. Signal only, no orders. Runner: GitHub Actions.")
 
