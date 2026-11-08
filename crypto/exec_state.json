@@ -1,21 +1,21 @@
 {
  "halted": false,
- "days": 6,
- "lastDate": "2026-11-06",
- "lastRun": "2026-11-07T00:09:41Z",
+ "days": 7,
+ "lastDate": "2026-11-07",
+ "lastRun": "2026-11-08T00:09:45Z",
  "lane": "D",
  "demo": true,
  "positions_usd": {
-  "BTC": 817,
-  "ETH": 817
+  "BTC": 816,
+  "ETH": 812
  },
  "targets_usd": {
   "BTC": 822,
   "ETH": 833
  },
  "gap_usd": {
-  "BTC": -5,
-  "ETH": -16
+  "BTC": -6,
+  "ETH": -21
  },
  "usdt": 83393.48,
  "buidl": 0,
