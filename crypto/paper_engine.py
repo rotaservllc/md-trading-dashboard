@@ -89,7 +89,7 @@ RULES = {
     "SMA200": r_sma200, "Donchian 20/10": lambda c: donchian(c, 20, 10), "Donchian 30/15": lambda c: donchian(c, 30, 15), "TSMOM 30": r_tsmom30,
 }
 EXTRA_RULES = {"Donchian 55/20": lambda c: donchian(c, 55, 20)}
-RELSTR = {"B50R": "B50", "F50R": "F50"}   # 8 Nov: relative-strength tilt, 70/30 toward the coin with the higher trailing 90d return   # 8 Nov review candidates; not part of the 7-rule score
+RELSTR = {"B50R": "B50", "F50R": "F50", "B50LR": "B50L", "F50LR": "F50L"}   # 8 Nov: relative-strength tilt, 70/30 toward the coin with the higher trailing 90d return   # 8 Nov review candidates; not part of the 7-rule score
 def analyse(closes):
     i = len(closes) - 1
     fired = {k: f(closes)[i] for k, f in RULES.items()}
@@ -181,6 +181,9 @@ def run(force=False, quiet=False, dry=False):
     for v, basev in RELSTR.items():
         lanes[v] = lane_step(lanes.get(v, {}), dict(BTC=A["BTC"]["wV"][basev] * tilt, ETH=A["ETH"]["wV"][basev] * (1 - tilt)), px, prev_px, PARAMS["feeSide"])
         lanes[v]["tilt"] = tilt
+        if len(VARIANTS[basev]) > 2:
+            fcost = sum(max(0.0, lanes[v]["w"][k] - (tilt if k == "BTC" else 1 - tilt)) * ((funding.get(k) or {}).get("day") or 0.0) for k in ["BTC", "ETH"])
+            lanes[v]["eq"] = round(lanes[v]["eq"] * (1 - fcost) * 100) / 100; lanes[v]["fundingPaid"] = r4(lanes[v].get("fundingPaid", 0) + fcost)
     for v in VARIANTS:
         lanes[v] = lane_step(lanes.get(v, {}), dict(BTC=A["BTC"]["wV"][v] / 2, ETH=A["ETH"]["wV"][v] / 2), px, prev_px, PARAMS["feeSide"])
         if len(VARIANTS[v]) > 2:   # levered lane: charge the day's funding on exposure above 1x of the lane (half per coin above 0.5)
