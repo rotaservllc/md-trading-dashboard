@@ -132,7 +132,10 @@ def main():
             r = work_order(f"{CASH_ASSET}-USDT", "sell", min(need * 1.002, bal.get(CASH_ASSET, 0)), bm, day, dry); log("cash raise", r)
     fills = []
     for c, side, usd in plan:
-        p = px[c]["ask" if side == "buy" else "bid"]; r = work_order(f"{c}-USDT", side, usd / p, meta[c], day, dry)
+        p = px[c]["ask" if side == "buy" else "bid"]; qty = usd / p
+        if side == "sell": qty = min(qty, bal.get(c, 0.0))          # never sell more than the available balance (OKX 51008)
+        if tgt[c] == 0 and side == "sell": qty = bal.get(c, 0.0)     # full exit: clear the position exactly
+        r = work_order(f"{c}-USDT", side, qty, meta[c], day, dry)
         slip = ((r["avg"] / r.get("mid", p) - 1) * (1 if side == "buy" else -1) * 1e4) if r.get("avg") else None
         fills.append(dict(date=st["lastDate"], coin=c, side=side, qty=r["filled"], avg_px=r["avg"], mid_at_signal=r.get("mid", p), slippage_bp=None if slip is None else round(slip, 1), path=r["path"], target_usd=round(usd)))
     # park proceeds in BUIDL
