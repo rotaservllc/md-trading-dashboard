@@ -1,23 +1,35 @@
 {
  "halted": false,
- "days": 7,
- "lastDate": "2026-11-07",
- "lastRun": "2026-11-08T00:09:45Z",
+ "days": 8,
+ "lastDate": "2026-11-08",
+ "lastRun": "2026-11-09T06:17:52Z",
  "lane": "D",
  "demo": true,
  "positions_usd": {
-  "BTC": 816,
-  "ETH": 812
+  "BTC": 803,
+  "ETH": 0
  },
  "targets_usd": {
   "BTC": 822,
-  "ETH": 833
+  "ETH": 0
  },
  "gap_usd": {
-  "BTC": -6,
-  "ETH": -21
+  "BTC": -19,
+  "ETH": 0
  },
- "usdt": 83393.48,
+ "usdt": 84165.06,
  "buidl": 0,
- "fills_today": []
+ "fills_today": [
+  {
+   "date": "2026-11-08",
+   "coin": "ETH",
+   "side": "sell",
+   "qty": 0.364414,
+   "avg_px": 2125.82,
+   "mid_at_signal": 2132.5200000000004,
+   "slippage_bp": 31.4,
+   "path": "post_only",
+   "target_usd": 777
+  }
+ ]
 }
