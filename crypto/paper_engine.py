@@ -118,15 +118,18 @@ def analyse(closes):
 r4 = lambda x: round(x * 1e4) / 1e4
 def apply_band(cur, tgt):
     return tgt if ((cur == 0) != (tgt == 0) or (cur > 0) != (tgt > 0) or abs(tgt - cur) > PARAMS["band"]) else cur
-def lane_step(lane, new_w, px, prev_px, fee):
-    ret = 0.0
+CASH_YIELD = 0.035   # BUIDL planning rate on idle capital, same convention as the backtests
+def lane_step(lane, new_w, px, prev_px, fee, accrue=True, lev_fee=0.0005):
+    ret = 0.0; gross = 0.0
     for k in new_w:
-        w = (lane.get("w") or {}).get(k, 0)
+        w = (lane.get("w") or {}).get(k, 0); gross += abs(w)
         if prev_px.get(k) and px.get(k): ret += w * (px[k] / prev_px[k] - 1)
-    w2, turn = {}, 0.0
+    if accrue: ret += max(0.0, 1.0 - gross) * CASH_YIELD / 365
+    w2, turn, lev_turn = {}, 0.0, 0.0
     for k in new_w:
         cur = (lane.get("w") or {}).get(k, 0); w2[k] = r4(apply_band(cur, new_w[k])); turn += abs(w2[k] - cur)
-    cost = turn * fee
+        lev_turn += abs(max(0.0, abs(w2[k]) - 0.5) - max(0.0, abs(cur) - 0.5))   # slice above 1x of the lane is a perp
+    cost = (turn - lev_turn) * fee + lev_turn * lev_fee
     eq = lane.get("eq", PARAMS["laneUSD"]) * (1 + ret - cost)
     return dict(lane, w=w2, eq=round(eq * 100) / 100, peak=max(lane.get("peak", PARAMS["laneUSD"]), eq), ret=r4(ret - cost),
                 trades=lane.get("trades", 0) + (1 if turn > 0 else 0), turnover=r4(lane.get("turnover", 0) + turn))
@@ -166,29 +169,37 @@ def run(force=False, quiet=False, dry=False):
     prev = json.load(open(STATE)) if os.path.exists(STATE) else dict(lanes={}, ledger=[])
     btc, eth = candles("BTC"), candles("ETH")
     date = btc["dates"][-1]
-    if not force and prev.get("lastDate") == date:
+    if eth["dates"][-1] != date: raise RuntimeError(f"candle dates differ: BTC {date} ETH {eth['dates'][-1]} ({btc['src']}/{eth['src']}), not marking")
+    remark = prev.get("lastDate") == date   # forced re-mark of an already marked day: no second accrual of funding or cash yield
+    if not force and remark:
         print("already marked", date); return prev
     A = dict(BTC=analyse(btc["closes"]), ETH=analyse(eth["closes"]))
     px = dict(BTC=A["BTC"]["close"], ETH=A["ETH"]["close"]); prev_px = prev.get("px") or px
-    funding = {}
+    funding = {}; funding_ok = True
     try: funding = dict(BTC=okx_funding("BTC-USDT-SWAP"), ETH=okx_funding("ETH-USDT-SWAP"))
-    except Exception as ex: print("funding", ex, file=sys.stderr)
+    except Exception as ex: print("funding", ex, file=sys.stderr); funding_ok = False
     lanes = dict(prev.get("lanes") or {})
-    lanes["D"] = lane_step(lanes.get("D", {}), dict(BTC=A["BTC"]["wD"] / 2, ETH=A["ETH"]["wD"] / 2), px, prev_px, PARAMS["feeSide"])
-    lanes["E"] = lane_step(lanes.get("E", {}), dict(BTC=A["BTC"]["wE"] / 2, ETH=A["ETH"]["wE"] / 2), px, prev_px, PARAMS["feeSide"])
-    lanes["S"] = lane_step(lanes.get("S", {}), dict(BTC=A["BTC"]["wS"] / 2, ETH=A["ETH"]["wS"] / 2), px, prev_px, PARAMS["perpFeeSide"])
-    tilt = 0.7 if (btc["closes"][-1] / btc["closes"][-91] - 1) > (eth["closes"][-1] / eth["closes"][-91] - 1) else 0.3
+    fday = lambda k: ((funding.get(k) or {}).get("day") if funding_ok else None)
+    def charge_funding(v, base_w):   # funding on the PREVIOUS day's levered slice (the slice that was actually held), none on a re-mark
+        if remark: return
+        prevw = ((prev.get("lanes") or {}).get(v, {}).get("w") or {})
+        if any(fday(k) is None for k in ["BTC", "ETH"]):
+            lanes[v]["fundingMissingDays"] = lanes[v].get("fundingMissingDays", 0) + 1; return
+        fcost = sum(max(0.0, prevw.get(k, 0) - base_w[k]) * fday(k) for k in ["BTC", "ETH"])
+        lanes[v]["eq"] = round(lanes[v]["eq"] * (1 - fcost) * 100) / 100; lanes[v]["fundingPaid"] = r4(lanes[v].get("fundingPaid", 0) + fcost)
+    lanes["D"] = lane_step(lanes.get("D", {}), dict(BTC=A["BTC"]["wD"] / 2, ETH=A["ETH"]["wD"] / 2), px, prev_px, PARAMS["feeSide"], accrue=not remark)
+    lanes["E"] = lane_step(lanes.get("E", {}), dict(BTC=A["BTC"]["wE"] / 2, ETH=A["ETH"]["wE"] / 2), px, prev_px, PARAMS["feeSide"], accrue=not remark)
+    lanes["S"] = lane_step(lanes.get("S", {}), dict(BTC=A["BTC"]["wS"] / 2, ETH=A["ETH"]["wS"] / 2), px, prev_px, PARAMS["perpFeeSide"], accrue=not remark)
+    spread = (btc["closes"][-1] / btc["closes"][-91] - 1) - (eth["closes"][-1] / eth["closes"][-91] - 1)
+    prev_tilt = ((prev.get("lanes") or {}).get("B50R", {}) or {}).get("tilt", 0.5)
+    tilt = 0.7 if spread > 0.05 else (0.3 if spread < -0.05 else (prev_tilt if prev_tilt in (0.3, 0.7) else (0.7 if spread > 0 else 0.3)))   # 5-pt hysteresis
     for v, basev in RELSTR.items():
-        lanes[v] = lane_step(lanes.get(v, {}), dict(BTC=A["BTC"]["wV"][basev] * tilt, ETH=A["ETH"]["wV"][basev] * (1 - tilt)), px, prev_px, PARAMS["feeSide"])
+        lanes[v] = lane_step(lanes.get(v, {}), dict(BTC=A["BTC"]["wV"][basev] * tilt, ETH=A["ETH"]["wV"][basev] * (1 - tilt)), px, prev_px, PARAMS["feeSide"], accrue=not remark)
+        if len(VARIANTS[basev]) > 2: charge_funding(v, {"BTC": prev_tilt if prev_tilt in (0.3, 0.7) else 0.5, "ETH": (1 - prev_tilt) if prev_tilt in (0.3, 0.7) else 0.5})
         lanes[v]["tilt"] = tilt
-        if len(VARIANTS[basev]) > 2:
-            fcost = sum(max(0.0, lanes[v]["w"][k] - (tilt if k == "BTC" else 1 - tilt)) * ((funding.get(k) or {}).get("day") or 0.0) for k in ["BTC", "ETH"])
-            lanes[v]["eq"] = round(lanes[v]["eq"] * (1 - fcost) * 100) / 100; lanes[v]["fundingPaid"] = r4(lanes[v].get("fundingPaid", 0) + fcost)
     for v in VARIANTS:
-        lanes[v] = lane_step(lanes.get(v, {}), dict(BTC=A["BTC"]["wV"][v] / 2, ETH=A["ETH"]["wV"][v] / 2), px, prev_px, PARAMS["feeSide"])
-        if len(VARIANTS[v]) > 2:   # levered lane: charge the day's funding on exposure above 1x of the lane (half per coin above 0.5)
-            fcost = sum(max(0.0, lanes[v]["w"][k] - 0.5) * ((funding.get(k) or {}).get("day") or 0.0) for k in ["BTC", "ETH"])
-            lanes[v]["eq"] = round(lanes[v]["eq"] * (1 - fcost) * 100) / 100; lanes[v]["fundingPaid"] = r4(lanes[v].get("fundingPaid", 0) + fcost)
+        lanes[v] = lane_step(lanes.get(v, {}), dict(BTC=A["BTC"]["wV"][v] / 2, ETH=A["ETH"]["wV"][v] / 2), px, prev_px, PARAMS["feeSide"], accrue=not remark)
+        if len(VARIANTS[v]) > 2: charge_funding(v, {"BTC": 0.5, "ETH": 0.5})
     C = lanes.get("C") or {"in": {}, "eq": PARAMS["laneUSD"], "peak": PARAMS["laneUSD"], "trades": 0}
     cret, cturn, in_now = 0.0, 0.0, {}
     for k in ["BTC", "ETH"]:
@@ -197,7 +208,7 @@ def run(force=False, quiet=False, dry=False):
             if f["ann7"] > PARAMS["carryIn"]: now = 1
             elif f["ann7"] < PARAMS["carryOut"]: now = 0
         in_now[k] = now
-        if was and f and f["day"] is not None: cret += 0.25 * f["day"]
+        if was and f and f["day"] is not None and not remark: cret += 0.25 * f["day"]
         cturn += abs(now - was) * 0.25
     ccost = cturn * (PARAMS["feeSide"] + PARAMS["perpFeeSide"])
     ceq = round(C["eq"] * (1 + cret - ccost) * 100) / 100
@@ -211,8 +222,9 @@ def run(force=False, quiet=False, dry=False):
             c = candles(s)
             if len(c["closes"]) >= 380: RA[s] = analyse(c["closes"]); rpx[s] = RA[s]["close"]
         except Exception as ex: print(s, ex, file=sys.stderr)
-    rot = {s: (RA[s]["wD"] / len(PARAMS["universe"]) if (composite >= 0.5 and s in RA) else 0.0) for s in PARAMS["universe"]}
-    lanes["R"] = lane_step(lanes.get("R", {}), rot, rpx, prev.get("rpx") or rpx, PARAMS["altFeeSide"])
+    prevR = ((prev.get("lanes") or {}).get("R", {}).get("w") or {})
+    rot = {s: ((RA[s]["wD"] / len(PARAMS["universe"]) if composite >= 0.5 else 0.0) if s in RA else prevR.get(s, 0.0)) for s in PARAMS["universe"]}
+    lanes["R"] = lane_step(lanes.get("R", {}), rot, rpx, prev.get("rpx") or rpx, PARAMS["altFeeSide"], accrue=not remark)
     row = dict(date=date, px=px, composite=r4(composite), eq={k: v["eq"] for k, v in lanes.items()}, wD=lanes["D"]["w"], wE=lanes["E"]["w"], wS=lanes["S"]["w"],
                carryIn=in_now, funding=lanes["C"]["funding"], rot=lanes["R"]["w"])
     ledger = [r for r in (prev.get("ledger") or []) if r["date"] != date] + [row]

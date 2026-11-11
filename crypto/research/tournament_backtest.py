@@ -32,7 +32,6 @@ CONFIGS = {  # name: (rule names, vol target or None)
     "F35 (fast3 VT35)": (pe.FAST, 0.35), "F50 (fast3 VT50)": (pe.FAST, 0.50), "F70": (pe.FAST, 0.70), "F00": (pe.FAST, None),
     "B35 (barbell VT35)": (pe.BARBELL, 0.35), "B50 (barbell VT50)": (pe.BARBELL, 0.50), "B70 (barbell VT70)": (pe.BARBELL, 0.70),
     "B50L (barbell VT50, 1.5x cap, no funding cost)": (pe.BARBELL, 0.50, 1.5), "F50L (fast3 VT50, 1.5x cap, no funding cost)": (pe.FAST, 0.50, 1.5),
-    "B35 (barbell VT35)": (pe.BARBELL, 0.35), "X16 (fast3 + Donchian 55/20, VT35)": (pe.FAST + ["Donchian 55/20"], 0.35),
     "slow4 VT35": ([k for k in pe.RULES if k not in pe.FAST], 0.35), "slow4 VT50": ([k for k in pe.RULES if k not in pe.FAST], 0.50),
 }
 

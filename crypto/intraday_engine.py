@@ -71,7 +71,7 @@ def run(force=False, quiet=False, dry=False):
            + f"Exposure F50h {pe.pct(sum(lanes['F50h']['w'].values()))} · B50h {pe.pct(sum(lanes['B50h']['w'].values()))}\n"
            + f"Bar {state['bars']}: {eq('F50h')} · {eq('B50h')}" + (f"\n{alert}" if alert else ""))
     print(msg)
-    daily_run = stamp.endswith("00:00")
+    daily_run = stamp.endswith("18:00")   # bar stamps are open times; the 18:00 bar closes at 00:00 UTC
     if not quiet and (changed or daily_run or alert or force): pe.send_telegram(msg)
     return state
 

@@ -25,6 +25,8 @@ class FakeOKX:
             return [dict(lotSz=lot, tickSz=tick, minSz="0.00001")]
         if "market/ticker" in path:
             inst = path.split("instId=")[1]; b, a = self.px[inst]; return [dict(bidPx=str(b), askPx=str(a), last=str((a + b) / 2))]
+        if "orders-pending" in path:
+            return [dict(instId=o["instId"], ordId="1", clOrdId=cl, side=o["side"], sz=str(o["sz"])) for cl, o in self.orders.items() if o["state"] in ("live", "partially_filled")]
         if "account/balance" in path:
             return [dict(details=[dict(ccy=k, availBal=str(v)) for k, v in self.bal.items()])]
         if path.endswith("/trade/order") and method == "POST":
@@ -50,7 +52,8 @@ class FakeOKX:
             if self.amend_fail: raise RuntimeError("OKX code 51400: amend failed")
             return [dict(sCode="0")]
         if path.endswith("/trade/cancel-order"):
-            o = self.orders.get(body["clOrdId"])
+            cl = body.get("clOrdId") or next((k for k, o in self.orders.items() if o["state"] in ("live", "partially_filled")), None)
+            o = self.orders.get(cl)
             if o and o["state"] != "filled": o["state"] = "canceled"
             return [dict(sCode="0")]
         raise RuntimeError("unexpected path " + path)
@@ -77,6 +80,10 @@ def scenario(name, bal, wBTC, wETH, setup=None, prev_exec=None, expect=None):
     except AssertionError as e:
         print(f"FAIL  {name}: {e}"); print("   sent:", fake.sent); print("   exec_state:", {k: st.get(k) for k in ('halted', 'positions_usd', 'targets_usd', 'gap_usd')}); print("   err:", err); return False
 
+def leftover(f):
+    f.orders["md20261111ETHS1"] = dict(instId="ETH-USDT", state="live", accFillSz="0", avgPx="", sz=0.364414, side="sell")
+# 14. leftover live sell from a killed run: cancelled first, then the exit is re-sent as a sell (never a buy)
+results_extra = []
 def assert_(cond, msg):
     if not cond: raise AssertionError(msg)
 
@@ -123,6 +130,15 @@ results.append(scenario("price gap beyond band -> rebalance", dict(USDT=9000.0, 
 results.append(scenario("within 5% band -> no orders", dict(USDT=9000.0, BTC=0.0395), 0.25, 0.0, expect=lambda f, s, e, tg: (
     assert_(e is None, f"error {e}"), assert_(len(f.sent) == 0, "no orders"), assert_(not s["halted"], "not halted"))))
 
+results.append(scenario("leftover order cancelled, no opposite side", dict(USDT=5000.0, BTC=0.04, ETH=0.364414), 0.0685, 0.0, setup=leftover, expect=lambda f, s, e, tg: (
+    assert_(e is None, f"error {e}"), assert_(f.orders["md20261111ETHS1"]["state"] == "canceled", "leftover cancelled"),
+    assert_(all(o["side"] == "sell" for o in f.sent), "no buy placed"), assert_(s["positions_usd"]["ETH"] == 0, "ETH flat"))))
+# 15. lane equity tracked and compared with paper
+results.append(scenario("lane equity vs paper recorded", dict(USDT=12000.0), 0.25, 0.125, expect=lambda f, s, e, tg: (
+    assert_(e is None, f"error {e}"), assert_("lane_equity" in s and abs(s["lane_equity"] - 12000) < 20, f"lane equity {s.get('lane_equity')}"), assert_("live_vs_paper_pts" in s, "comparison field"))))
+# 16. planned order larger than 1.5x lane halts without trading (account not dedicated to the lane)
+results.append(scenario("oversized order halts", dict(USDT=5000.0, BTC=1.0, ETH=1.0), 0.0685, 0.0, expect=lambda f, s, e, tg: (
+    assert_(len(f.sent) == 0, "no orders"), assert_(s.get("halted") is True, "halted"), assert_(any("1.5x" in t for t in tg), "telegram reason"))))
 n_fail = sum(1 for r in results if not r)
 print(f"\n{len(results) - n_fail} passed, {n_fail} failed")
 sys.exit(1 if n_fail else 0)
