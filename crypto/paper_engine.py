@@ -238,8 +238,11 @@ def run(force=False, quiet=False, dry=False):
     if not dry:
         json.dump(state, open(STATE, "w"), indent=1)
         with open(LEDGER, "w", newline="") as f:
-            w = csv.writer(f); w.writerow(["date", "btc", "eth", "composite", "eqD", "eqE", "eqC", "eqS", "eqR", "wD_btc", "wD_eth", "carry_btc", "carry_eth"] + [f"eq{v}" for v in VARIANTS])
-            for r in ledger: w.writerow([r["date"], r["px"]["BTC"], r["px"]["ETH"], r["composite"], r["eq"]["D"], r["eq"]["E"], r["eq"]["C"], r["eq"]["S"], r["eq"]["R"], r["wD"]["BTC"], r["wD"]["ETH"], r["carryIn"]["BTC"], r["carryIn"]["ETH"]] + [r["eq"].get(v, "") for v in VARIANTS])
+            w = csv.writer(f); w.writerow(["date", "btc", "eth", "composite", "eqD", "eqE", "eqC", "eqS", "eqR", "wD_btc", "wD_eth", "carry_btc", "carry_eth"] + [f"eq{v}" for v in VARIANTS] + [f"eq{v}" for v in RELSTR])
+            for r in ledger: w.writerow([r["date"], r["px"]["BTC"], r["px"]["ETH"], r["composite"], r["eq"]["D"], r["eq"]["E"], r["eq"]["C"], r["eq"]["S"], r["eq"]["R"], r["wD"]["BTC"], r["wD"]["ETH"], r["carryIn"]["BTC"], r["carryIn"]["ETH"]] + [r["eq"].get(v, "") for v in VARIANTS] + [r["eq"].get(v, "") for v in RELSTR])
+    if not dry:
+        try: import dash_export; dash_export.build()
+        except Exception as ex: print("dash_export", ex, file=sys.stderr)
     msg = format_msg(state, changed)
     print(msg)
     if not quiet and (changed or monday or force): send_telegram(msg)

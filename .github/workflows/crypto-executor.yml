@@ -39,5 +39,5 @@ jobs:
         if: always()
         run: |
           git config user.name "crypto-paper-bot" && git config user.email "noreply@rotaserv.local"
-          git add crypto/state.json crypto/ledger.csv crypto/exec_state.json crypto/fills.csv 2>/dev/null || true
+          git add crypto/state.json crypto/ledger.csv crypto/exec_state.json crypto/fills.csv crypto/dashboard_data.json 2>/dev/null || true
           git diff --cached --quiet || (git commit -m "crypto exec $(date -u +%F)" && git pull --rebase && git push)

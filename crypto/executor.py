@@ -198,7 +198,10 @@ def main():
            + f"Positions ${ex['positions_usd']['BTC']:,} BTC · ${ex['positions_usd']['ETH']:,} ETH · targets ${ex['targets_usd']['BTC']:,} / ${ex['targets_usd']['ETH']:,} · gap {gap}\n"
            + f"Lane equity ${lane_equity:,.0f} vs paper ${paper_eq or 0:,.0f} ({ex['live_vs_paper_pts'] if ex['live_vs_paper_pts'] is not None else 'n/a'} pts) · USDT ${ex['usdt']:,.0f} · {CASH_ASSET} {ex['buidl']:,.0f}" + (" · ⛔ HALTED: gap > 2% of lane" if halted else ""))
     log(msg)
-    if not dry: pe.send_telegram(msg)
+    if not dry:
+        pe.send_telegram(msg)
+        try: import dash_export; dash_export.build()
+        except Exception as ex2: log("dash_export", ex2)
 
 if __name__ == "__main__":
     try: main()

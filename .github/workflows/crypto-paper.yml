@@ -32,5 +32,5 @@ jobs:
         run: |
           git config user.name "crypto-paper-bot"
           git config user.email "noreply@rotaserv.local"
-          git add crypto/state.json crypto/ledger.csv
+          git add crypto/state.json crypto/ledger.csv crypto/dashboard_data.json
           git diff --cached --quiet || (git commit -m "crypto paper mark $(date -u +%F)" && git pull --rebase && git push)

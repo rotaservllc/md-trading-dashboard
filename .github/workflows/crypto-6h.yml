@@ -21,5 +21,5 @@ jobs:
         run: python3 crypto/intraday_engine.py
       - run: |
           git config user.name "crypto-paper-bot" && git config user.email "noreply@rotaserv.local"
-          git add crypto/state_6h.json crypto/ledger_6h.csv
+          git add crypto/state_6h.json crypto/ledger_6h.csv crypto/dashboard_data.json
           git diff --cached --quiet || (git commit -m "crypto 6h mark $(date -u +%FT%H)" && git pull --rebase && git push)
