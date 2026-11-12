@@ -1,12 +1,12 @@
 {
  "halted": false,
- "days": 10,
- "lastDate": "2026-11-10",
- "lastRun": "2026-11-11T00:10:42Z",
+ "days": 11,
+ "lastDate": "2026-11-11",
+ "lastRun": "2026-11-12T00:10:09Z",
  "lane": "D",
  "demo": true,
  "positions_usd": {
-  "BTC": 794,
+  "BTC": 795,
   "ETH": 0
  },
  "targets_usd": {
@@ -14,10 +14,14 @@
   "ETH": 0
  },
  "gap_usd": {
-  "BTC": -28,
+  "BTC": -27,
   "ETH": 0
  },
  "usdt": 84165.06,
  "buidl": 0,
- "fills_today": []
+ "fills_today": [],
+ "lane_cash": 11204.55,
+ "lane_equity": 12000.0,
+ "paper_equity": 11666.26,
+ "live_vs_paper_pts": 2.78
 }
