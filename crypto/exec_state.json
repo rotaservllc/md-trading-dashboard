@@ -20,8 +20,5 @@
  "usdt": 84165.06,
  "buidl": 0,
  "fills_today": [],
- "lane_cash": 11204.55,
- "lane_equity": 12000.0,
- "paper_equity": 11666.26,
- "live_vs_paper_pts": 2.78
+ "paper_equity": 11666.26
 }

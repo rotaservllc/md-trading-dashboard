@@ -135,7 +135,7 @@ def main():
     px = {c: ticker(f"{c}-USDT") for c in COINS}; meta = {c: instrument(f"{c}-USDT") for c in COINS}
     cur = {c: bal.get(c, 0.0) * (px[c]["bid"] + px[c]["ask"]) / 2 for c in COINS}
     # lane cash ledger (lane-level equity, independent of whatever else sits in the account)
-    lane_cash = ex.get("lane_cash", laneUSD - sum(cur.values()))
+    lane_cash = ex.get("lane_cash", (lane.get("eq") or laneUSD) - sum(cur.values()))   # first run: start the live ledger level with the paper lane
     tgt = {c: w.get(c, 0.0) * laneUSD for c in COINS}
     log(f"lane {LANE} {st['lastDate']} targets {tgt} current { {k: round(v) for k, v in cur.items()} } USDT {bal.get('USDT', 0):.0f} {CASH_ASSET} {bal.get(CASH_ASSET, 0):.0f}")
     plan = []
