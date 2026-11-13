@@ -3,3 +3,4 @@ date,coin,side,qty,avg_px,mid_at_signal,slippage_bp,path,target_usd
 2026-11-01,ETH,sell,0.635586,2285.49,2285.465,-0.1,post_only,1452
 2026-11-05,BTC,sell,0.02213941,76183.3,76183.25,-0.0,post_only,1687
 2026-11-08,ETH,sell,0.364414,2125.82,2132.5200000000004,31.4,post_only,777
+2026-11-12,BTC,sell,0.01076388,71373.0,71372.95,-0.0,post_only,768,71461.0,12.3

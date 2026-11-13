@@ -1,24 +1,41 @@
 {
  "halted": false,
- "days": 11,
- "lastDate": "2026-11-11",
- "lastRun": "2026-11-12T00:10:09Z",
+ "days": 12,
+ "lastDate": "2026-11-12",
+ "lastRun": "2026-11-13T00:11:17Z",
  "lane": "D",
  "demo": true,
  "positions_usd": {
-  "BTC": 795,
+  "BTC": 0,
   "ETH": 0
  },
  "targets_usd": {
-  "BTC": 822,
+  "BTC": 0,
   "ETH": 0
  },
  "gap_usd": {
-  "BTC": -27,
+  "BTC": 0,
   "ETH": 0
  },
- "usdt": 84165.06,
+ "usdt": 84930.24,
  "buidl": 0,
- "fills_today": [],
- "paper_equity": 11666.26
+ "fills_today": [
+  {
+   "date": "2026-11-12",
+   "coin": "BTC",
+   "side": "sell",
+   "qty": 0.01076388,
+   "avg_px": 71373.0,
+   "mid_at_signal": 71372.95,
+   "slippage_bp": -0.0,
+   "path": "post_only",
+   "target_usd": 768,
+   "signal_close": 71461.0,
+   "shortfall_bp": 12.3
+  }
+ ],
+ "paper_equity": 11638.09,
+ "lane_cash": 11638.09,
+ "lane_equity": 11638.09,
+ "live_vs_paper_pts": 0.0
 }
