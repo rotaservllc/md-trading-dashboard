@@ -1,8 +1,8 @@
 {
  "halted": false,
- "days": 18,
- "lastDate": "2026-11-18",
- "lastRun": "2026-11-19T00:09:25Z",
+ "days": 19,
+ "lastDate": "2026-11-19",
+ "lastRun": "2026-11-20T00:09:39Z",
  "lane": "D",
  "demo": true,
  "positions_usd": {
@@ -20,8 +20,8 @@
  "usdt": 84930.24,
  "buidl": 0,
  "fills_today": [],
- "paper_equity": 11644.81,
+ "paper_equity": 11645.93,
  "lane_cash": 11638.09,
  "lane_equity": 11638.09,
- "live_vs_paper_pts": -0.06
+ "live_vs_paper_pts": -0.07
 }
